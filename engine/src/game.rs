@@ -1,0 +1,696 @@
+//! 단일 플레이어 게임 상태. 렌더링·네트워크와 완전히 분리된 순수 로직.
+//!
+//! 시간은 "tick" 단위(기본 60 tick = 1초)로만 진행되며, 실제 시계에 의존하지 않는다.
+//! 같은 시드와 같은 입력 순서를 주면 어떤 플랫폼에서든 같은 결과가 나온다.
+
+use crate::piece::{Kind, ALL_KINDS, KICKS};
+use crate::rng::Rng;
+use std::collections::VecDeque;
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+pub const WIDTH: usize = 10;
+/// 화면에 보이지 않는 생성 영역
+pub const HIDDEN: usize = 2;
+pub const VISIBLE: usize = 20;
+pub const HEIGHT: usize = HIDDEN + VISIBLE;
+pub const VISIBLE_CELLS: usize = WIDTH * VISIBLE;
+
+pub const TICKS_PER_SECOND: u32 = 60;
+pub const LOCK_DELAY: u16 = 30;
+pub const MAX_LOCK_RESETS: u8 = 15;
+pub const PREVIEW: usize = 5;
+/// 한 번에 올라오는 최대 방해줄
+pub const MAX_GARBAGE_PER_LOCK: u8 = 8;
+/// 이 tick 수마다 레벨 상승 (대전 시 속도 증가)
+pub const LEVEL_UP_TICKS: u32 = 30 * TICKS_PER_SECOND;
+pub const MAX_LEVEL: u8 = 14;
+
+/// 레벨별 한 칸 낙하에 필요한 tick 수
+const GRAVITY: [u16; MAX_LEVEL as usize + 1] = [60, 48, 38, 30, 24, 19, 15, 12, 9, 7, 5, 4, 3, 2, 1];
+
+/// 셀 코드: 0 빈칸, 1..=7 블록, 8 방해줄, 9 고스트(표시 전용)
+pub const CELL_EMPTY: u8 = 0;
+pub const CELL_GARBAGE: u8 = 8;
+pub const CELL_GHOST: u8 = 9;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum Input {
+    Left,
+    Right,
+    RotateCw,
+    RotateCcw,
+    SoftDrop,
+    HardDrop,
+    Hold,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Active {
+    pub kind: Kind,
+    pub rot: u8,
+    pub x: i8,
+    pub y: i8,
+}
+
+impl Active {
+    pub fn cells(&self) -> impl Iterator<Item = (i8, i8)> + '_ {
+        self.kind.cells(self.rot).into_iter().map(move |(dx, dy)| (self.x + dx, self.y + dy))
+    }
+}
+
+/// 한 번의 입력/틱에서 발생한 결과
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Events {
+    pub locked: bool,
+    pub cleared: u8,
+    /// 상쇄 후 상대에게 보낼 공격 줄 수
+    pub attack: u8,
+    /// 받은 공격을 상쇄한 줄 수
+    pub cancelled: u8,
+    pub garbage_applied: u8,
+    pub died: bool,
+}
+
+impl Events {
+    fn merge(&mut self, o: Events) {
+        self.locked |= o.locked;
+        self.cleared += o.cleared;
+        self.attack += o.attack;
+        self.cancelled += o.cancelled;
+        self.garbage_applied += o.garbage_applied;
+        self.died |= o.died;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Stats {
+    pub score: u32,
+    pub lines: u32,
+    pub pieces: u32,
+    pub sent: u32,
+    pub received: u32,
+    pub cancelled: u32,
+    pub max_combo: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Game {
+    /// HEIGHT × WIDTH, 행 우선. 0행이 맨 위(숨김 영역).
+    pub board: Vec<u8>,
+    pub active: Option<Active>,
+    pub hold: Option<Kind>,
+    pub hold_used: bool,
+    pub next: VecDeque<Kind>,
+    bag: Vec<Kind>,
+    bag_rng: Rng,
+    garbage_rng: Rng,
+    /// 대기 중인 방해줄 묶음 (도착 순)
+    pub pending_garbage: VecDeque<u8>,
+    gravity_counter: u16,
+    lock_counter: u16,
+    lock_resets: u8,
+    pub elapsed: u32,
+    pub level: u8,
+    pub combo: i8,
+    pub dead: bool,
+    pub stats: Stats,
+    /// 상태가 바뀔 때마다 증가 (변경 감지용)
+    pub rev: u32,
+}
+
+impl Game {
+    pub fn new(seed: u64) -> Self {
+        let mut g = Game {
+            board: vec![CELL_EMPTY; WIDTH * HEIGHT],
+            active: None,
+            hold: None,
+            hold_used: false,
+            next: VecDeque::with_capacity(PREVIEW + 7),
+            bag: Vec::with_capacity(7),
+            bag_rng: Rng::new(seed),
+            garbage_rng: Rng::new(seed.rotate_left(17) ^ 0xA5A5),
+            pending_garbage: VecDeque::new(),
+            gravity_counter: 0,
+            lock_counter: 0,
+            lock_resets: 0,
+            elapsed: 0,
+            level: 0,
+            combo: -1,
+            dead: false,
+            stats: Stats::default(),
+            rev: 0,
+        };
+        g.fill_next();
+        g.spawn_next();
+        g
+    }
+
+    #[inline]
+    pub fn cell(&self, x: usize, y: usize) -> u8 {
+        self.board[y * WIDTH + x]
+    }
+
+    fn fill_next(&mut self) {
+        while self.next.len() < PREVIEW + 1 {
+            if self.bag.is_empty() {
+                self.bag.extend_from_slice(&ALL_KINDS);
+                // Fisher–Yates
+                for i in (1..self.bag.len()).rev() {
+                    let j = self.bag_rng.below(i as u32 + 1) as usize;
+                    self.bag.swap(i, j);
+                }
+            }
+            let k = self.bag.pop().unwrap();
+            self.next.push_back(k);
+        }
+    }
+
+    fn fits(&self, a: &Active) -> bool {
+        a.cells().all(|(x, y)| {
+            x >= 0 && (x as usize) < WIDTH && y >= 0 && (y as usize) < HEIGHT && self.cell(x as usize, y as usize) == CELL_EMPTY
+        })
+    }
+
+    fn spawn(&mut self, kind: Kind) {
+        let a = Active { kind, rot: 0, x: kind.spawn_x(), y: (HIDDEN as i8) - 1 };
+        self.gravity_counter = 0;
+        self.lock_counter = 0;
+        self.lock_resets = 0;
+        if self.fits(&a) {
+            self.active = Some(a);
+        } else {
+            self.active = None;
+            self.dead = true;
+        }
+    }
+
+    fn spawn_next(&mut self) {
+        let k = self.next.pop_front().unwrap();
+        self.fill_next();
+        self.spawn(k);
+    }
+
+    fn grounded(&self) -> bool {
+        match self.active {
+            Some(a) => !self.fits(&Active { y: a.y + 1, ..a }),
+            None => false,
+        }
+    }
+
+    fn try_move(&mut self, dx: i8, dy: i8) -> bool {
+        let Some(a) = self.active else { return false };
+        let n = Active { x: a.x + dx, y: a.y + dy, ..a };
+        if self.fits(&n) {
+            self.active = Some(n);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn try_rotate(&mut self, dir: i8) -> bool {
+        let Some(a) = self.active else { return false };
+        let rot = ((a.rot as i8 + dir).rem_euclid(4)) as u8;
+        for (dx, dy) in KICKS {
+            let n = Active { rot, x: a.x + dx, y: a.y + dy, ..a };
+            if self.fits(&n) {
+                self.active = Some(n);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 바닥에 닿은 상태에서 조작이 성공하면 고정 대기 시간을 초기화한다
+    fn on_moved(&mut self) {
+        if self.lock_counter > 0 && self.lock_resets < MAX_LOCK_RESETS {
+            self.lock_counter = 0;
+            self.lock_resets += 1;
+        }
+    }
+
+    pub fn ghost(&self) -> Option<Active> {
+        let mut a = self.active?;
+        while self.fits(&Active { y: a.y + 1, ..a }) {
+            a.y += 1;
+        }
+        Some(a)
+    }
+
+    pub fn apply_input(&mut self, input: Input) -> Events {
+        if self.dead || self.active.is_none() {
+            return Events::default();
+        }
+        let mut ev = Events::default();
+        let changed = match input {
+            Input::Left => {
+                let ok = self.try_move(-1, 0);
+                if ok {
+                    self.on_moved();
+                }
+                ok
+            }
+            Input::Right => {
+                let ok = self.try_move(1, 0);
+                if ok {
+                    self.on_moved();
+                }
+                ok
+            }
+            Input::RotateCw | Input::RotateCcw => {
+                let ok = self.try_rotate(if input == Input::RotateCw { 1 } else { -1 });
+                if ok {
+                    self.on_moved();
+                }
+                ok
+            }
+            Input::SoftDrop => {
+                let ok = self.try_move(0, 1);
+                if ok {
+                    self.stats.score += 1;
+                    self.gravity_counter = 0;
+                }
+                ok
+            }
+            Input::HardDrop => {
+                let mut d = 0;
+                while self.try_move(0, 1) {
+                    d += 1;
+                }
+                self.stats.score += 2 * d;
+                ev = self.lock();
+                true
+            }
+            Input::Hold => {
+                if self.hold_used {
+                    false
+                } else {
+                    let cur = self.active.unwrap().kind;
+                    self.hold_used = true;
+                    match self.hold.replace(cur) {
+                        Some(h) => self.spawn(h),
+                        None => self.spawn_next(),
+                    }
+                    ev.died = self.dead;
+                    true
+                }
+            }
+        };
+        if changed {
+            self.rev = self.rev.wrapping_add(1);
+        }
+        ev
+    }
+
+    /// 고정 tick 1회 진행: 시간, 중력, 고정 처리
+    pub fn tick(&mut self) -> Events {
+        if self.dead {
+            return Events::default();
+        }
+        self.elapsed += 1;
+        let lvl = ((self.elapsed / LEVEL_UP_TICKS) as u8).max((self.stats.lines / 10) as u8).min(MAX_LEVEL);
+        if lvl != self.level {
+            self.level = lvl;
+            self.rev = self.rev.wrapping_add(1);
+        }
+        let mut ev = Events::default();
+        if self.active.is_none() {
+            return ev;
+        }
+        if self.grounded() {
+            self.lock_counter += 1;
+            if self.lock_counter >= LOCK_DELAY {
+                ev.merge(self.lock());
+                self.rev = self.rev.wrapping_add(1);
+            }
+        } else {
+            self.lock_counter = 0;
+            self.gravity_counter += 1;
+            if self.gravity_counter >= GRAVITY[self.level as usize] {
+                self.gravity_counter = 0;
+                self.try_move(0, 1);
+                self.rev = self.rev.wrapping_add(1);
+            }
+        }
+        ev
+    }
+
+    fn lock(&mut self) -> Events {
+        let mut ev = Events { locked: true, ..Default::default() };
+        let Some(a) = self.active.take() else { return ev };
+        let mut above_visible = true;
+        for (x, y) in a.cells() {
+            self.board[y as usize * WIDTH + x as usize] = a.kind.code();
+            if y as usize >= HIDDEN {
+                above_visible = false;
+            }
+        }
+        self.stats.pieces += 1;
+        self.hold_used = false;
+
+        let cleared = self.clear_lines();
+        ev.cleared = cleared;
+        if cleared > 0 {
+            self.combo = self.combo.saturating_add(1);
+            self.stats.max_combo = self.stats.max_combo.max(self.combo as u8);
+            self.stats.lines += cleared as u32;
+            let base = [0u32, 100, 300, 500, 800][cleared as usize];
+            self.stats.score += base * (self.level as u32 + 1) + 50 * self.combo.max(0) as u32;
+
+            let mut attack = attack_for(cleared, self.combo);
+            if self.board.iter().all(|&c| c == CELL_EMPTY) {
+                attack += 4; // 판 전체 비우기 보너스
+            }
+            // 방어: 받은 공격부터 상쇄
+            while attack > 0 {
+                let Some(front) = self.pending_garbage.front_mut() else { break };
+                let n = attack.min(*front);
+                *front -= n;
+                attack -= n;
+                ev.cancelled += n;
+                if *front == 0 {
+                    self.pending_garbage.pop_front();
+                }
+            }
+            self.stats.cancelled += ev.cancelled as u32;
+            self.stats.sent += attack as u32;
+            ev.attack = attack;
+        } else {
+            self.combo = -1;
+            ev.garbage_applied = self.apply_garbage();
+            if self.dead {
+                ev.died = true;
+                return ev;
+            }
+        }
+
+        // 블록 전체가 숨김 영역에 고정되면 패배
+        if above_visible && cleared == 0 {
+            self.dead = true;
+            ev.died = true;
+            return ev;
+        }
+        self.spawn_next();
+        ev.died = self.dead;
+        ev
+    }
+
+    fn clear_lines(&mut self) -> u8 {
+        let mut cleared = 0u8;
+        let mut write = HEIGHT;
+        for read in (0..HEIGHT).rev() {
+            let row = &self.board[read * WIDTH..(read + 1) * WIDTH];
+            if row.iter().all(|&c| c != CELL_EMPTY) {
+                cleared += 1;
+                continue;
+            }
+            write -= 1;
+            if write != read {
+                self.board.copy_within(read * WIDTH..(read + 1) * WIDTH, write * WIDTH);
+            }
+        }
+        for c in &mut self.board[..write * WIDTH] {
+            *c = CELL_EMPTY;
+        }
+        cleared
+    }
+
+    fn apply_garbage(&mut self) -> u8 {
+        let mut budget = MAX_GARBAGE_PER_LOCK;
+        let mut applied = 0u8;
+        while budget > 0 {
+            let Some(front) = self.pending_garbage.front_mut() else { break };
+            let n = (*front).min(budget);
+            *front -= n;
+            budget -= n;
+            if *front == 0 {
+                self.pending_garbage.pop_front();
+            }
+            let hole = self.garbage_rng.below(WIDTH as u32) as usize;
+            let n = n as usize;
+            // 맨 위 n줄에 블록이 있으면 밀려나 패배
+            if self.board[..n * WIDTH].iter().any(|&c| c != CELL_EMPTY) {
+                self.dead = true;
+            }
+            self.board.copy_within(n * WIDTH.., 0);
+            let start = (HEIGHT - n) * WIDTH;
+            for r in 0..n {
+                for x in 0..WIDTH {
+                    self.board[start + r * WIDTH + x] = if x == hole { CELL_EMPTY } else { CELL_GARBAGE };
+                }
+            }
+            applied += n as u8;
+        }
+        self.stats.received += applied as u32;
+        applied
+    }
+
+    /// 상대가 보낸 공격을 대기열에 추가한다 (다음 고정 시 반영)
+    pub fn receive_garbage(&mut self, lines: u8) {
+        if lines == 0 || self.dead {
+            return;
+        }
+        self.pending_garbage.push_back(lines);
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    pub fn pending_total(&self) -> u32 {
+        self.pending_garbage.iter().map(|&n| n as u32).sum()
+    }
+
+    /// 화면용 보이는 영역 셀 (블록/고스트 포함). `out` 길이는 VISIBLE_CELLS.
+    pub fn render_visible(&self, ghost: bool, out: &mut [u8]) {
+        out.copy_from_slice(&self.board[HIDDEN * WIDTH..]);
+        if let Some(a) = self.active {
+            if ghost {
+                if let Some(g) = self.ghost() {
+                    for (x, y) in g.cells() {
+                        if y as usize >= HIDDEN {
+                            out[(y as usize - HIDDEN) * WIDTH + x as usize] = CELL_GHOST;
+                        }
+                    }
+                }
+            }
+            for (x, y) in a.cells() {
+                if y as usize >= HIDDEN {
+                    out[(y as usize - HIDDEN) * WIDTH + x as usize] = a.kind.code();
+                }
+            }
+        }
+    }
+
+    /// 현재 블록의 가장 왼쪽 위 셀 위치 (보이는 좌표계, 열/행 0-기반)
+    pub fn active_anchor(&self) -> Option<(u8, u8)> {
+        let a = self.active?;
+        let mut best: Option<(i8, i8)> = None;
+        for (x, y) in a.cells() {
+            best = Some(match best {
+                None => (x, y),
+                Some((bx, by)) => (bx.min(x), by.min(y)),
+            });
+        }
+        best.map(|(x, y)| (x as u8, (y - HIDDEN as i8).max(0) as u8))
+    }
+
+    /// 쌓인 높이 (보이는 영역 기준)
+    pub fn stack_height(&self) -> u8 {
+        for y in 0..HEIGHT {
+            if self.board[y * WIDTH..(y + 1) * WIDTH].iter().any(|&c| c != CELL_EMPTY) {
+                return (HEIGHT - y) as u8;
+            }
+        }
+        0
+    }
+}
+
+/// 줄 삭제 수와 연속 삭제(콤보)에 따른 공격량
+pub fn attack_for(cleared: u8, combo: i8) -> u8 {
+    let base = [0u8, 0, 1, 2, 4][cleared.min(4) as usize];
+    const COMBO: [u8; 12] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5];
+    let c = COMBO[(combo.max(0) as usize).min(COMBO.len() - 1)];
+    base + c
+}
+
+/// 보이는 셀 200개를 4비트씩 묶어 100바이트로 압축 (상대 게임판 전송용)
+pub fn pack_cells(cells: &[u8]) -> Vec<u8> {
+    cells.chunks(2).map(|p| (p[0] & 0x0F) | (p.get(1).copied().unwrap_or(0) << 4)).collect()
+}
+
+pub fn unpack_cells(packed: &[u8], out: &mut [u8]) {
+    for (i, b) in packed.iter().enumerate() {
+        if 2 * i < out.len() {
+            out[2 * i] = b & 0x0F;
+        }
+        if 2 * i + 1 < out.len() {
+            out[2 * i + 1] = b >> 4;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fill_row(g: &mut Game, y: usize, hole: Option<usize>) {
+        for x in 0..WIDTH {
+            g.board[y * WIDTH + x] = if Some(x) == hole { CELL_EMPTY } else { CELL_GARBAGE };
+        }
+    }
+
+    #[test]
+    fn same_seed_same_sequence() {
+        let mut a = Game::new(1234);
+        let mut b = Game::new(1234);
+        for i in 0..200 {
+            let inp = [Input::Left, Input::RotateCw, Input::HardDrop, Input::Right, Input::Hold][i % 5];
+            assert_eq!(a.apply_input(inp), b.apply_input(inp));
+            a.tick();
+            b.tick();
+        }
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bag_contains_each_kind_once() {
+        let mut g = Game::new(99);
+        let mut seen = Vec::new();
+        // 첫 블록 + 대기열에서 7개 수집
+        seen.push(g.active.unwrap().kind);
+        while seen.len() < 7 {
+            g.board.iter_mut().for_each(|c| *c = 0);
+            g.apply_input(Input::HardDrop);
+            seen.push(g.active.unwrap().kind);
+        }
+        seen.sort_by_key(|k| k.code());
+        seen.dedup();
+        assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn walls_block_movement() {
+        let mut g = Game::new(5);
+        for _ in 0..20 {
+            g.apply_input(Input::Left);
+        }
+        let min_x = g.active.unwrap().cells().map(|c| c.0).min().unwrap();
+        assert_eq!(min_x, 0);
+        for _ in 0..20 {
+            g.apply_input(Input::Right);
+        }
+        let max_x = g.active.unwrap().cells().map(|c| c.0).max().unwrap();
+        assert_eq!(max_x, WIDTH as i8 - 1);
+    }
+
+    #[test]
+    fn hard_drop_locks_and_spawns() {
+        let mut g = Game::new(1);
+        let ev = g.apply_input(Input::HardDrop);
+        assert!(ev.locked);
+        assert!(g.active.is_some());
+        assert_eq!(g.stats.pieces, 1);
+        assert!(g.board[(HEIGHT - 1) * WIDTH..].iter().any(|&c| c != 0));
+    }
+
+    #[test]
+    fn line_clear_and_attack() {
+        let mut g = Game::new(3);
+        // 맨 아래 4줄을 0번 열만 비워 둔다
+        for y in HEIGHT - 4..HEIGHT {
+            fill_row(&mut g, y, Some(0));
+        }
+        g.active = Some(Active { kind: Kind::I, rot: 1, x: -2, y: 0 });
+        assert!(g.fits(&g.active.unwrap()));
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.cleared, 4);
+        assert_eq!(ev.attack, 4 + 4); // 4줄 + 전체 비우기
+        assert_eq!(g.stats.lines, 4);
+    }
+
+    #[test]
+    fn attack_cancels_pending_garbage() {
+        let mut g = Game::new(3);
+        for y in HEIGHT - 2..HEIGHT {
+            fill_row(&mut g, y, Some(0));
+        }
+        g.board[(HEIGHT - 3) * WIDTH + 5] = CELL_GARBAGE; // 전체 비우기 방지
+        g.receive_garbage(3);
+        g.active = Some(Active { kind: Kind::I, rot: 1, x: -2, y: 0 });
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.cleared, 2);
+        assert_eq!(ev.cancelled, 1);
+        assert_eq!(ev.attack, 0);
+        assert_eq!(g.pending_total(), 2);
+    }
+
+    #[test]
+    fn garbage_applied_on_lock_without_clear() {
+        let mut g = Game::new(8);
+        g.receive_garbage(2);
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.garbage_applied, 2);
+        assert_eq!(g.pending_total(), 0);
+        let bottom = &g.board[(HEIGHT - 1) * WIDTH..];
+        assert_eq!(bottom.iter().filter(|&&c| c == CELL_GARBAGE).count(), WIDTH - 1);
+    }
+
+    #[test]
+    fn gravity_moves_piece_down() {
+        let mut g = Game::new(2);
+        let y0 = g.active.unwrap().y;
+        for _ in 0..GRAVITY[0] {
+            g.tick();
+        }
+        assert_eq!(g.active.unwrap().y, y0 + 1);
+    }
+
+    #[test]
+    fn piece_locks_after_delay_on_ground() {
+        let mut g = Game::new(2);
+        while g.apply_input(Input::SoftDrop) == Events::default() && g.grounded() == false {}
+        assert!(g.grounded());
+        let pieces = g.stats.pieces;
+        for _ in 0..LOCK_DELAY {
+            g.tick();
+        }
+        assert_eq!(g.stats.pieces, pieces + 1);
+    }
+
+    #[test]
+    fn topping_out_kills() {
+        let mut g = Game::new(11);
+        for _ in 0..200 {
+            if g.dead {
+                break;
+            }
+            g.apply_input(Input::HardDrop);
+        }
+        assert!(g.dead);
+    }
+
+    #[test]
+    fn hold_swaps_once_per_piece() {
+        let mut g = Game::new(4);
+        let first = g.active.unwrap().kind;
+        g.apply_input(Input::Hold);
+        assert_eq!(g.hold, Some(first));
+        let second = g.active.unwrap().kind;
+        g.apply_input(Input::Hold);
+        assert_eq!(g.active.unwrap().kind, second, "같은 블록에서 두 번 보관할 수 없음");
+    }
+
+    #[test]
+    fn pack_roundtrip() {
+        let cells: Vec<u8> = (0..VISIBLE_CELLS).map(|i| (i % 10) as u8).collect();
+        let p = pack_cells(&cells);
+        assert_eq!(p.len(), VISIBLE_CELLS / 2);
+        let mut out = vec![0u8; VISIBLE_CELLS];
+        unpack_cells(&p, &mut out);
+        assert_eq!(cells, out);
+    }
+}

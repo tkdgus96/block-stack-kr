@@ -1,0 +1,471 @@
+{
+  "channel": "msedge",
+  "base": "http://localhost:3000",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+  "scenarios": {
+    "bench_dom_gpu_on": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        61
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 200,
+        "p50": 0.1,
+        "p95": 0.3,
+        "max": 0.4,
+        "mean": 0.139
+      },
+      "input_to_next_frame_ms": {
+        "n": 200,
+        "p50": 0.5,
+        "p95": 15.4,
+        "max": 17.5,
+        "mean": 3.499
+      },
+      "own_board_update_ms": {
+        "n": 201,
+        "p50": 0.1,
+        "p95": 0.3,
+        "max": 0.4,
+        "mean": 0.131
+      },
+      "opp_boards_update_ms": {
+        "n": 188,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.3,
+        "mean": 0.087
+      },
+      "renders_per_sec_per_page": 19.4,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        4.41
+      ],
+      "script_pct": [
+        0.73
+      ],
+      "style_layout_pct": [
+        0.36
+      ],
+      "js_heap_mb": [
+        2.45
+      ],
+      "browser_cpu_pct_of_one_core": 12.2,
+      "browser_private_mem_mb": 238.6,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 10.0,
+      "gpu": {
+        "2d_canvas": "enabled",
+        "gpu_compositing": "enabled",
+        "rasterization": "enabled"
+      },
+      "gpu_device": "Intel(R) Iris(R) Xe Graphics"
+    },
+    "bench_canvas_gpu_on": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        61
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.5,
+        "mean": 0.135
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 0.5,
+        "p95": 13.9,
+        "max": 16.6,
+        "mean": 2.617
+      },
+      "own_board_update_ms": {
+        "n": 202,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.5,
+        "mean": 0.128
+      },
+      "opp_boards_update_ms": {
+        "n": 186,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.6,
+        "mean": 0.074
+      },
+      "renders_per_sec_per_page": 19.4,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        2.5
+      ],
+      "script_pct": [
+        0.71
+      ],
+      "style_layout_pct": [
+        0.18
+      ],
+      "js_heap_mb": [
+        2.55
+      ],
+      "browser_cpu_pct_of_one_core": 7.8,
+      "browser_private_mem_mb": 225.7,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.3,
+      "gpu": {
+        "2d_canvas": "enabled",
+        "gpu_compositing": "enabled",
+        "rasterization": "enabled"
+      },
+      "gpu_device": "Intel(R) Iris(R) Xe Graphics"
+    },
+    "bench_dom_gpu_off": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        61
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.5,
+        "mean": 0.136
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 0.4,
+        "p95": 11.4,
+        "max": 15.2,
+        "mean": 1.989
+      },
+      "own_board_update_ms": {
+        "n": 202,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.5,
+        "mean": 0.129
+      },
+      "opp_boards_update_ms": {
+        "n": 185,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.3,
+        "mean": 0.101
+      },
+      "renders_per_sec_per_page": 19.3,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        4.4
+      ],
+      "script_pct": [
+        0.75
+      ],
+      "style_layout_pct": [
+        0.36
+      ],
+      "js_heap_mb": [
+        2.44
+      ],
+      "browser_cpu_pct_of_one_core": 8.6,
+      "browser_private_mem_mb": 162.9,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.3,
+      "gpu": {
+        "2d_canvas": "unavailable_software",
+        "gpu_compositing": "disabled_software",
+        "rasterization": "disabled_software"
+      },
+      "gpu_device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)"
+    },
+    "bench_canvas_gpu_off": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        62
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 0.1,
+        "p95": 0.3,
+        "max": 0.5,
+        "mean": 0.137
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 0.5,
+        "p95": 15.2,
+        "max": 17.4,
+        "mean": 2.721
+      },
+      "own_board_update_ms": {
+        "n": 202,
+        "p50": 0.1,
+        "p95": 0.3,
+        "max": 0.4,
+        "mean": 0.13
+      },
+      "opp_boards_update_ms": {
+        "n": 184,
+        "p50": 0.1,
+        "p95": 0.2,
+        "max": 0.8,
+        "mean": 0.074
+      },
+      "renders_per_sec_per_page": 19.2,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        2.91
+      ],
+      "script_pct": [
+        0.71
+      ],
+      "style_layout_pct": [
+        0.16
+      ],
+      "js_heap_mb": [
+        2.55
+      ],
+      "browser_cpu_pct_of_one_core": 5.6,
+      "browser_private_mem_mb": 155.2,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.3,
+      "gpu": {
+        "2d_canvas": "unavailable_software",
+        "gpu_compositing": "disabled_software",
+        "rasterization": "disabled_software"
+      },
+      "gpu_device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)"
+    },
+    "bench_dom_gpu_off_cpu4x": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        60
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 1.9,
+        "p95": 5.1,
+        "max": 10.0,
+        "mean": 2.099
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 4.2,
+        "p95": 14.9,
+        "max": 22.0,
+        "mean": 5.268
+      },
+      "own_board_update_ms": {
+        "n": 202,
+        "p50": 1.7,
+        "p95": 4.5,
+        "max": 9.8,
+        "mean": 1.933
+      },
+      "opp_boards_update_ms": {
+        "n": 148,
+        "p50": 1.7,
+        "p95": 6.2,
+        "max": 8.0,
+        "mean": 1.97
+      },
+      "renders_per_sec_per_page": 17.5,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        31.44
+      ],
+      "script_pct": [
+        8.05
+      ],
+      "style_layout_pct": [
+        3.57
+      ],
+      "js_heap_mb": [
+        2.31
+      ],
+      "browser_cpu_pct_of_one_core": null,
+      "browser_private_mem_mb": 162.1,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.3,
+      "gpu": {
+        "2d_canvas": "unavailable_software",
+        "gpu_compositing": "disabled_software",
+        "rasterization": "disabled_software"
+      },
+      "gpu_device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)"
+    },
+    "bench_canvas_gpu_off_cpu4x": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        61
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 1.7,
+        "p95": 4.6,
+        "max": 8.0,
+        "mean": 1.976
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 4.3,
+        "p95": 13.6,
+        "max": 17.7,
+        "mean": 5.452
+      },
+      "own_board_update_ms": {
+        "n": 201,
+        "p50": 1.4,
+        "p95": 4.2,
+        "max": 7.5,
+        "mean": 1.799
+      },
+      "opp_boards_update_ms": {
+        "n": 163,
+        "p50": 1.0,
+        "p95": 3.8,
+        "max": 8.8,
+        "mean": 1.502
+      },
+      "renders_per_sec_per_page": 18.2,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        25.25
+      ],
+      "script_pct": [
+        7.98
+      ],
+      "style_layout_pct": [
+        1.84
+      ],
+      "js_heap_mb": [
+        2.49
+      ],
+      "browser_cpu_pct_of_one_core": null,
+      "browser_private_mem_mb": 151.2,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.3,
+      "gpu": {
+        "2d_canvas": "unavailable_software",
+        "gpu_compositing": "disabled_software",
+        "rasterization": "disabled_software"
+      },
+      "gpu_device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)"
+    },
+    "bench_dom_gpu_off_cpu4x_lowspec": {
+      "seconds": 20.0,
+      "pages": 1,
+      "raf_per_sec_check": [
+        61
+      ],
+      "inputs_sent": 0,
+      "input_to_dom_ms": {
+        "n": 201,
+        "p50": 2.0,
+        "p95": 5.4,
+        "max": 12.8,
+        "mean": 2.18
+      },
+      "input_to_next_frame_ms": {
+        "n": 201,
+        "p50": 3.8,
+        "p95": 14.4,
+        "max": 20.6,
+        "mean": 5.545
+      },
+      "own_board_update_ms": {
+        "n": 202,
+        "p50": 1.7,
+        "p95": 5.0,
+        "max": 12.8,
+        "mean": 2.022
+      },
+      "opp_boards_update_ms": {
+        "n": 73,
+        "p50": 2.9,
+        "p95": 5.3,
+        "max": 8.4,
+        "mean": 2.615
+      },
+      "renders_per_sec_per_page": 13.7,
+      "rtt_ms": [
+        0.0
+      ],
+      "main_thread_busy_pct": [
+        30.39
+      ],
+      "script_pct": [
+        8.1
+      ],
+      "style_layout_pct": [
+        3.42
+      ],
+      "js_heap_mb": [
+        2.23
+      ],
+      "browser_cpu_pct_of_one_core": null,
+      "browser_private_mem_mb": 157.8,
+      "browsers": 1,
+      "wasm_memory_mb": [
+        1.19
+      ],
+      "server_cpu_pct_of_one_core": 0.0,
+      "server_rss_mb": 9.4,
+      "gpu": {
+        "2d_canvas": "unavailable_software",
+        "gpu_compositing": "disabled_software",
+        "rasterization": "disabled_software"
+      },
+      "gpu_device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)"
+    }
+  },
+  "logical_cpus": 8,
+  "ram_gb": 16
+}

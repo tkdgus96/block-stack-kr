@@ -1,0 +1,19 @@
+[package]
+name = "bs-client"
+description = "Block Stack 웹 클라이언트 (Leptos CSR + WASM, Spreadsheet Mode)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+bs-engine = { path = "../engine" }
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+  "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d",
+  "Node", "DomTokenList", "CssStyleDeclaration", "Location", "History", "Storage", "Performance",
+  "KeyboardEvent", "Event", "EventTarget", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent",
+  "AudioContext", "OscillatorNode", "GainNode", "AudioParam", "AudioDestinationNode", "BaseAudioContext", "AudioNode", "AudioScheduledSourceNode", "OscillatorType",
+  "MediaQueryList", "Navigator", "Clipboard", "VisibilityState", "HtmlInputElement", "Url", "UrlSearchParams",
+] }

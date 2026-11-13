@@ -1,0 +1,16 @@
+[package]
+name = "bs-server"
+description = "Block Stack 대전 서버 (Axum + Tokio WebSocket, 권위 있는 고정 tick 시뮬레이션)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+bs-engine = { path = "../engine" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

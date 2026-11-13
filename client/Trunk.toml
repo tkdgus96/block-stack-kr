@@ -1,0 +1,12 @@
+[build]
+target = "index.html"
+dist = "dist"
+filehash = true
+minify = "on_release"
+
+[serve]
+port = 8080
+# 개발 중에는 Axum 서버(3000)로 WebSocket 을 프록시
+[[proxy]]
+backend = "ws://127.0.0.1:3000/ws"
+ws = true

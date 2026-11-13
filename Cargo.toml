@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["engine", "server", "client"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# WASM 전용 프로필: 크기 우선 (trunk가 data-cargo-profile 로 선택)
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
