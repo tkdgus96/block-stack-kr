@@ -5,6 +5,8 @@
 //! - 결정적: 같은 시드 + 같은 입력 순서 = 같은 결과
 
 pub mod bot;
+pub mod finesse;
+pub mod puzzles;
 pub mod practice;
 pub mod game;
 pub mod piece;

@@ -167,6 +167,21 @@ pub struct Game {
     /// Sidecar metadata: never change the legacy Game postcard wire layout.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub combat: CombatState,
+    /// 레벨이 오르는 방식. 혼자 하는 모드에서만 바꾸므로 전송하지 않는다.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub level_rule: LevelRule,
+}
+
+/// 중력 레벨이 오르는 방식
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LevelRule {
+    /// 대전 기본값: 30초마다 또는 10줄마다 중 더 높은 쪽
+    #[default]
+    TimeOrLines,
+    /// 마라톤: 10줄마다 한 단계
+    Lines,
+    /// Zen: 레벨이 오르지 않는다
+    Fixed,
 }
 
 impl Game {
@@ -191,6 +206,7 @@ impl Game {
             stats: Stats::default(),
             rev: 0,
             combat: CombatState::default(),
+            level_rule: LevelRule::default(),
         };
         g.fill_next();
         g.spawn_next();
@@ -365,7 +381,12 @@ impl Game {
             return Events::default();
         }
         self.elapsed += 1;
-        let lvl = ((self.elapsed / LEVEL_UP_TICKS) as u8).max((self.stats.lines / 10) as u8).min(MAX_LEVEL);
+        let by_lines = (self.stats.lines / 10).min(MAX_LEVEL as u32) as u8;
+        let lvl = match self.level_rule {
+            LevelRule::TimeOrLines => ((self.elapsed / LEVEL_UP_TICKS).min(MAX_LEVEL as u32) as u8).max(by_lines),
+            LevelRule::Lines => by_lines,
+            LevelRule::Fixed => self.level,
+        }.min(MAX_LEVEL);
         if lvl != self.level {
             self.level = lvl;
             self.rev = self.rev.wrapping_add(1);
@@ -539,6 +560,25 @@ impl Game {
         }
         self.stats.received += applied as u32;
         applied
+    }
+
+    /// 퍼즐 준비용: 현재 블록을 `kind` 로 바꿔 생성 위치에 다시 놓는다.
+    pub fn set_active_kind(&mut self, kind: Kind) {
+        self.spawn(kind);
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// Zen 모드용: 쌓인 블록과 대기 공격을 비우고 다음 블록으로 이어서 한다.
+    /// 점수·줄 수 같은 기록은 유지한다.
+    pub fn clear_board_and_continue(&mut self) {
+        self.board.fill(CELL_EMPTY);
+        self.pending_garbage.clear();
+        self.combat.garbage_ready_at.clear();
+        self.combo = -1;
+        self.dead = false;
+        self.hold_used = false;
+        self.spawn_next();
+        self.rev = self.rev.wrapping_add(1);
     }
 
     /// 상대가 보낸 공격을 대기열에 추가한다 (다음 고정 시 반영)

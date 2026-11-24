@@ -1,6 +1,7 @@
 //! Self-contained offline lab: never sends room inputs or writes multiplayer records.
 use bs_engine::{
-    practice::{Mode, Outcome, Session},
+    practice::{Mode, Outcome, Session, MARATHON_LINES},
+    puzzles::PUZZLES,
     Input, VISIBLE_CELLS, WIDTH,
 };
 use leptos::{html, prelude::*};
@@ -26,7 +27,7 @@ fn save_best(s: &Session) -> bool {
         return true;
     };
     let improve = best(s.mode).is_none_or(|old| {
-        if s.mode == Mode::Blitz {
+        if s.mode.higher_is_better() {
             value > old
         } else {
             value < old
@@ -145,12 +146,13 @@ pub(crate) fn PracticeLab() -> impl IntoView {
         }
         callback.dispose();
     });
-    let input = move |key: Input| {
+    // pressed: 새로 누른 키인지(키 입력 효율 계산에 쓴다), 누르고 있어 반복된 입력인지
+    let input = move |key: Input, pressed: bool| {
         if !running.get_untracked() {
             return;
         }
         update();
-        session.update(|s| s.input(key));
+        session.update(|s| if pressed { s.press(key) } else { s.input(key) });
         let s = session.get_untracked();
         if s.outcome != Outcome::Playing {
             running.set(false);
@@ -174,19 +176,34 @@ pub(crate) fn PracticeLab() -> impl IntoView {
             on:keydown=move |e:web_sys::KeyboardEvent| {
                 e.stop_propagation();
                 let action=match e.code().as_str(){"ArrowLeft"=>Some(Input::Left),"ArrowRight"=>Some(Input::Right),"ArrowDown"=>Some(Input::SoftDrop),"ArrowUp"|"KeyX"=>Some(Input::RotateCw),"KeyZ"=>Some(Input::RotateCcw),"KeyA"=>Some(Input::Rotate180),"Space"=>Some(Input::HardDrop),"KeyC"|"ShiftLeft"=>Some(Input::Hold),_=>None};
-                if let Some(action)=action {e.prevent_default();if !e.repeat() || matches!(action,Input::Left|Input::Right|Input::SoftDrop){input(action);}}
+                if let Some(action)=action {e.prevent_default();if !e.repeat() || matches!(action,Input::Left|Input::Right|Input::SoftDrop){input(action,!e.repeat());}}
             }
             on:keyup=move |e:web_sys::KeyboardEvent| e.stop_propagation()
             on:focusout=move |_|held.set(Vec::new())>
             <div class="feature-title"><h2>"혼자 연습실"</h2><span>"대전 전적에 영향 없음"</span></div>
-            <div class="practice-modes">{Mode::ALL.into_iter().map(move |mode|view!{<button type="button" class:selected=move ||session.with(|s|s.mode==mode) on:click=move |_|{running.set(false);held.set(Vec::new());session.set(Session::new(mode,1));saved.set(true);}>{mode.title()}</button>}).collect_view()}</div>
+            <div class="practice-modes">{Mode::ALL.into_iter().map(move |mode|view!{<button type="button" class:selected=move ||session.with(|s|s.mode.same_kind(mode)) on:click=move |_|{running.set(false);held.set(Vec::new());session.set(Session::new(mode,1));saved.set(true);}>{mode.menu_title()}</button>}).collect_view()}</div>
+            <Show when=move ||session.with(|s|matches!(s.mode,Mode::Puzzle(_)))>
+                <label class="puzzle-pick">"퍼즐 "
+                    <select aria-label="퍼즐 선택" on:change=move |ev| {
+                        let i: u8 = event_target_value(&ev).parse().unwrap_or(0);
+                        running.set(false);held.set(Vec::new());session.set(Session::new(Mode::Puzzle(i),1));saved.set(true);
+                    }>
+                        {PUZZLES.iter().enumerate().map(|(i,p)| {
+                            let mode = Mode::Puzzle(i as u8);
+                            view!{<option value=i.to_string() selected=move ||session.with(|s|s.mode==mode)>
+                                {move || format!("{}. {}{}", i+1, p.title, if session.with(|_|best(mode)).is_some() {" (풀었음)"} else {""})}
+                            </option>}
+                        }).collect_view()}
+                    </select>
+                </label>
+            </Show>
             <h3>{move ||session.with(|s|s.mode.title())}</h3>
             <p class="feature-note">{move ||session.with(|s|s.mode.hint())}</p>
             <div class="practice-arena">
                 <div class="practice-playfield">
                 <canvas node_ref=canvas width="240" height="480" class="practice-board" aria-label="연습 게임판"></canvas>
             <div class="practice-touch" aria-label="연습 터치 조작">{[(Input::Left,"◀ 이동"),(Input::SoftDrop,"▼ 내리기"),(Input::Right,"이동 ▶"),(Input::RotateCcw,"↶ 회전"),(Input::RotateCw,"회전 ↷"),(Input::Hold,"보관"),(Input::HardDrop,"⤓ 고정")].into_iter().map(move |(action,label)|view!{<button type="button" disabled=move ||!running.get() on:pointerdown=move |e:web_sys::PointerEvent| {
-                e.prevent_default();input(action);
+                e.prevent_default();input(action,true);
                 if matches!(action,Input::Left|Input::Right|Input::SoftDrop) && running.get_untracked(){
                     if let Some(el)=e.current_target().and_then(|t|t.dyn_into::<web_sys::Element>().ok()){let _=el.set_pointer_capture(e.pointer_id());}
                     held.update(|v|v.push((e.pointer_id(),action)));repeat_at.set(now()+180.);
@@ -195,16 +212,19 @@ pub(crate) fn PracticeLab() -> impl IntoView {
             on:pointerup=move |e:web_sys::PointerEvent|held.update(|v|v.retain(|(id,_)|*id!=e.pointer_id()))
             on:pointercancel=move |e:web_sys::PointerEvent|held.update(|v|v.retain(|(id,_)|*id!=e.pointer_id()))
             on:lostpointercapture=move |e:web_sys::PointerEvent|held.update(|v|v.retain(|(id,_)|*id!=e.pointer_id()))
-            on:click=move |e:web_sys::MouseEvent|if e.detail()==0{input(action);}>{label}</button>}).collect_view()}</div>
+            on:click=move |e:web_sys::MouseEvent|if e.detail()==0{input(action,true);}>{label}</button>}).collect_view()}</div>
                 </div>
                 <div class="practice-side">
                     <div class="practice-status" role="status" aria-live="polite">{move || session.with(|s|match s.outcome {Outcome::Success=>"도전 성공!",Outcome::Failed=>"도전 종료 · 다시 시도하세요",Outcome::Playing=>if running.get(){"플레이 중"}else{"시작 버튼을 누르세요"}})}</div>
                     <dl><dt>"시간"</dt><dd>{move ||session.with(|s|if s.mode==Mode::Blitz {time(7200-s.ticks.min(7200))}else{time(s.ticks)})}</dd>
-                    <dt>"지운 줄"</dt><dd>{move ||session.with(|s|format!("{}{}",s.game.stats.lines,if s.mode==Mode::Sprint{" / 40"}else{""}))}</dd>
+                    <dt>"지운 줄"</dt><dd>{move ||session.with(|s|match s.mode {Mode::Sprint=>format!("{} / 40",s.game.stats.lines),Mode::Marathon=>format!("{} / {MARATHON_LINES}",s.game.stats.lines),_=>s.game.stats.lines.to_string()})}</dd>
                     <dt>"점수"</dt><dd>{move ||session.with(|s|s.game.stats.score)}</dd>
                     <dt>"상쇄 / 대기 공격"</dt><dd>{move ||session.with(|s|format!("{} / {}",s.game.stats.cancelled,s.game.pending_total()))}</dd>
                     <dt>"보관 / 다음 블록"</dt><dd>{move ||session.with(|s|format!("{} / {}",s.game.hold.map(|k|format!("{k:?}")).unwrap_or_else(||"—".into()),s.game.next.iter().take(5).map(|k|format!("{k:?}")).collect::<Vec<_>>().join(" ")))}</dd>
-                    <dt>"개인 최고"</dt><dd>{move ||session.with(|s|best(s.mode).map(|v|if s.mode==Mode::Blitz{format!("{v}점")}else{time(v)}).unwrap_or_else(||"아직 없음".into()))}</dd></dl>
+                    <dt>"개인 최고"</dt><dd>{move ||session.with(|s|best(s.mode).map(|v|if s.mode.higher_is_better(){format!("{v}점")}else{time(v)}).unwrap_or_else(||"아직 없음".into()))}</dd>
+                    <Show when=move ||session.with(|s|matches!(s.mode,Mode::Marathon|Mode::Zen))><dt>"레벨"</dt><dd>{move ||session.with(|s|s.game.level+1)}</dd></Show>
+                    <dt title="블록 하나를 놓는 데 누른 키 수. 누르고 있어 반복된 이동은 세지 않습니다.">"블록당 키 입력"</dt><dd>{move ||session.with(|s|format!("{:.2}",s.kpp()))}</dd>
+                    <dt title="생성 위치에서 놓은 자리까지 필요한 최소 키 수보다 많이 누른 블록 수. 보관·소프트 드롭을 쓴 블록은 제외합니다.">"키 입력 실수"</dt><dd>{move ||session.with(|s|format!("{} / {}",s.faults,s.judged))}</dd></dl>
                     <button type="button" class="primary practice-start" on:click=move |_|restart()>{move ||if running.get(){"처음부터 다시"}else{"시작 / 다시 도전"}}</button>
                     <p class="feature-note">"← → 이동 · ↓ 내리기 · ↑/X 오른쪽 회전 · Z 왼쪽 회전 · A 180도 회전 · Space 고정 · C 보관"</p>
                     <p class="feature-note">"연습 과제는 자동 낙하 없이 천천히 조작할 수 있습니다. 최고 기록은 이 브라우저에 저장됩니다."</p>
