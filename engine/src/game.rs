@@ -11,8 +11,11 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 pub const WIDTH: usize = 10;
-/// 화면에 보이지 않는 생성 영역
-pub const HIDDEN: usize = 2;
+/// 화면에 보이지 않는 영역. 보이는 판 위로 10줄을 두어, 방해줄에 밀려 올라간
+/// 블록이 바로 판 밖으로 사라져 패배하지 않게 한다. 가이드라인 게임은 20줄이지만
+/// 내 상태 메시지 크기(400바이트 미만)를 지키려고 10줄로 정했다.
+/// 블록은 이 영역의 맨 아래(보이는 판 바로 위)에서 생성된다.
+pub const HIDDEN: usize = 10;
 pub const VISIBLE: usize = 20;
 pub const HEIGHT: usize = HIDDEN + VISIBLE;
 pub const VISIBLE_CELLS: usize = WIDTH * VISIBLE;
@@ -21,6 +24,9 @@ pub const TICKS_PER_SECOND: u32 = 60;
 pub const LOCK_DELAY: u16 = 30;
 pub const MAX_LOCK_RESETS: u8 = 15;
 pub const PREVIEW: usize = 5;
+/// 받은 공격이 대기열에 들어온 뒤 게임판에 올라올 수 있을 때까지의 tick (0.5초).
+/// 그 사이에 줄을 지우면 상쇄할 수 있다.
+pub const GARBAGE_DELAY_TICKS: u32 = 30;
 /// 한 번에 올라오는 최대 방해줄
 pub const MAX_GARBAGE_PER_LOCK: u8 = 8;
 /// 이 tick 수마다 레벨 상승 (대전 시 속도 증가)
@@ -78,6 +84,9 @@ pub struct RotationInfo { pub kick_index: u8 }
 pub struct CombatState {
     pub last_rotation: Option<RotationInfo>,
     pub back_to_back: u16,
+    /// `pending_garbage` 뒤쪽 원소와 순서대로 짝을 이루는 도착 tick(`elapsed` 기준).
+    /// 레거시 Game 직렬화에는 들어가지 않으므로, 개수가 모자라면 앞쪽 원소는 이미 도착한 것으로 본다.
+    pub garbage_ready_at: VecDeque<u32>,
 }
 
 /// 한 번의 입력/틱에서 발생한 결과
@@ -434,7 +443,7 @@ impl Game {
                 *front -= n;
                 attack -= n;
                 ev.cancelled += n;
-                if *front == 0 { self.pending_garbage.pop_front(); }
+                if *front == 0 { self.pop_pending_front(); }
             }
             self.stats.cancelled += ev.cancelled as u32;
             self.stats.sent += attack as u32;
@@ -488,16 +497,30 @@ impl Game {
         cleared
     }
 
+    /// 대기열 맨 앞 묶음에 도착 시각이 없거나(레거시 상태) 도착 시각이 지났는지
+    fn front_garbage_ready(&self) -> bool {
+        let untimed = self.pending_garbage.len().saturating_sub(self.combat.garbage_ready_at.len());
+        untimed > 0 || self.combat.garbage_ready_at.front().is_some_and(|&t| t <= self.elapsed)
+    }
+
+    fn pop_pending_front(&mut self) {
+        if self.pending_garbage.pop_front().is_some()
+            && self.pending_garbage.len() < self.combat.garbage_ready_at.len()
+        {
+            self.combat.garbage_ready_at.pop_front();
+        }
+    }
+
     fn apply_garbage(&mut self) -> u8 {
         let mut budget = MAX_GARBAGE_PER_LOCK;
         let mut applied = 0u8;
-        while budget > 0 {
+        while budget > 0 && self.front_garbage_ready() {
             let Some(front) = self.pending_garbage.front_mut() else { break };
             let n = (*front).min(budget);
             *front -= n;
             budget -= n;
             if *front == 0 {
-                self.pending_garbage.pop_front();
+                self.pop_pending_front();
             }
             let hole = self.garbage_rng.below(WIDTH as u32) as usize;
             let n = n as usize;
@@ -523,8 +546,18 @@ impl Game {
         if lines == 0 || self.dead {
             return;
         }
+        // 레거시 상태에서 넘어와 도착 시각이 빠진 앞쪽 원소가 있어도 짝이 어긋나지 않게 뒤에 붙인다.
         self.pending_garbage.push_back(lines);
+        self.combat.garbage_ready_at.push_back(self.elapsed + GARBAGE_DELAY_TICKS);
         self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// 대기 중인 공격을 (줄 수, 도착 tick) 으로 돌려준다. 도착 시각이 없는 원소는 0 이다.
+    pub fn pending_schedule(&self) -> Vec<(u8, u32)> {
+        let untimed = self.pending_garbage.len().saturating_sub(self.combat.garbage_ready_at.len());
+        self.pending_garbage.iter().enumerate().map(|(i, &n)| {
+            (n, if i < untimed { 0 } else { self.combat.garbage_ready_at[i - untimed] })
+        }).collect()
     }
 
     pub fn pending_total(&self) -> u32 {
@@ -910,7 +943,7 @@ mod tests {
         let g = Game::new(19);
         let legacy = postcard::to_allocvec(&g).unwrap();
         let mut changed = g.clone();
-        changed.combat = CombatState { last_rotation:Some(RotationInfo { kick_index:4 }), back_to_back:77 };
+        changed.combat = CombatState { last_rotation:Some(RotationInfo { kick_index:4 }), back_to_back:77, garbage_ready_at: VecDeque::from([9]) };
         assert_eq!(legacy,postcard::to_allocvec(&changed).unwrap());
         let decoded: Game = postcard::from_bytes(&legacy).unwrap();
         assert_eq!(decoded.combat,CombatState::default());
@@ -1006,11 +1039,56 @@ mod tests {
     fn garbage_applied_on_lock_without_clear() {
         let mut g = Game::new(8);
         g.receive_garbage(2);
+        g.elapsed += GARBAGE_DELAY_TICKS;
         let ev = g.apply_input(Input::HardDrop);
         assert_eq!(ev.garbage_applied, 2);
         assert_eq!(g.pending_total(), 0);
         let bottom = &g.board[(HEIGHT - 1) * WIDTH..];
         assert_eq!(bottom.iter().filter(|&&c| c == CELL_GARBAGE).count(), WIDTH - 1);
+    }
+
+    #[test]
+    fn garbage_waits_for_delay_and_can_be_cancelled_meanwhile() {
+        let mut g = Game::new(8);
+        g.receive_garbage(2);
+        assert_eq!(g.pending_schedule(), vec![(2, GARBAGE_DELAY_TICKS)]);
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.garbage_applied, 0, "garbage must not rise before its delay");
+        assert_eq!(g.pending_total(), 2);
+        // 기다리는 동안 줄을 지우면 상쇄한다.
+        g.receive_garbage(3);
+        prepare_clear(&mut g, 2, false);
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!((ev.generated, ev.cancelled), (1, 1));
+        assert_eq!(g.pending_schedule(), vec![(1, GARBAGE_DELAY_TICKS), (3, GARBAGE_DELAY_TICKS)]);
+        g.elapsed = GARBAGE_DELAY_TICKS;
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.garbage_applied, 4, "both arrived chunks rise on the next lock");
+        assert!(g.pending_schedule().is_empty());
+        assert!(g.combat.garbage_ready_at.is_empty());
+    }
+
+    #[test]
+    fn legacy_pending_without_arrival_time_is_ready_and_stays_paired() {
+        let mut g = Game::new(8);
+        g.pending_garbage.push_back(2); // 레거시 상태: 도착 시각 없음
+        g.receive_garbage(1);
+        assert_eq!(g.pending_schedule(), vec![(2, 0), (1, GARBAGE_DELAY_TICKS)]);
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.garbage_applied, 2);
+        assert_eq!(g.pending_schedule(), vec![(1, GARBAGE_DELAY_TICKS)]);
+    }
+
+    #[test]
+    fn garbage_push_into_hidden_rows_does_not_kill() {
+        let mut g = Game::new(8);
+        // 보이는 판 맨 윗줄(스폰 위치 밖, 0열)에 블록이 있어도 방해줄 4줄로 바로 지지 않는다.
+        g.board[HIDDEN * WIDTH] = CELL_GARBAGE;
+        g.pending_garbage.push_back(4);
+        let ev = g.apply_input(Input::HardDrop);
+        assert_eq!(ev.garbage_applied, 4);
+        assert!(!g.dead);
+        assert_eq!(g.board[(HIDDEN - 4) * WIDTH], CELL_GARBAGE);
     }
 
     #[test]

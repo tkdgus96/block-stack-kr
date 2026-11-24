@@ -200,6 +200,7 @@ fn MyField(ui: Ui) -> impl IntoView {
                 <span class=move || badge_class(my_rank())>{move || my_rank().map(|r| r.to_string()).unwrap_or_else(|| "-".into())}</span>
                 <span class="arc-name">{my_name}</span>
                 <span class="arc-you">"YOU"</span><span class="team-tag">{move || crate::room_controls::team_label(ui,me())}</span><span class="arc-ko">"KO " <b>{move || my().kos}</b></span>
+                <crate::battle::TargetModeSelect ui=ui/>
             </div>
             <div class="arc-field">
                 <div class="arc-left">
@@ -217,8 +218,9 @@ fn MyField(ui: Ui) -> impl IntoView {
                         <div class="arc-kv"><span>"상쇄"</span><b>{move || my().cancelled}</b></div>
                     </div>
                 </div>
-                <div class="meter" class:combat-receiving=move || { incoming.get() > 0 } title="받을 공격">
+                <div class="meter" class:combat-receiving=move || { incoming.get() > 0 } title="받을 공격 (노란 부분은 다음 고정 때 올라올 줄)">
                     <div class="meter-fill" style:height=move || format!("{}%", (my().pending * 5).min(100))></div>
+                    <div class="meter-fill ready" style:height=move || format!("{}%", (ui.incoming_ready.get().min(my().pending) * 5).min(100))></div>
                 </div>
                 <div class="arc-board-wrap">
                     <div id="my-board" class="board"></div>
@@ -234,6 +236,9 @@ fn MyField(ui: Ui) -> impl IntoView {
                     <div class="arc-box arc-incoming" class:hot=move || { my().pending > 0 }>
                         <div class="arc-label">"받을 공격"</div>
                         <div class="arc-big">{move || my().pending}</div>
+                        <div class="arc-incoming-ready" class:hot=move || { ui.incoming_ready.get() > 0 }>
+                            "곧 올라옴 " <b>{move || ui.incoming_ready.get().min(my().pending)}</b>
+                        </div>
                     </div>
                 </div>
             </div>

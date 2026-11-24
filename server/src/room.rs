@@ -6,7 +6,7 @@
 
 use bs_engine::bot;
 use bs_engine::game::{pack_cells, Game, Input, TICKS_PER_SECOND, VISIBLE_CELLS};
-use bs_engine::protocol::{encode, CombatEvent, CombatStatus, BattleStat, ChatLine, ClientMsg, RoomConfig, MemberState, MatchSummary, RoundPlayer, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg, MAX_CHAT_LEN};
+use bs_engine::protocol::{encode, TargetMode, CombatEvent, CombatStatus, BattleStat, ChatLine, ClientMsg, RoomConfig, MemberState, MatchSummary, RoundPlayer, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg, MAX_CHAT_LEN};
 use bs_engine::rng::Rng;
 use std::collections::{HashMap, VecDeque};
 use axum::body::Bytes;
@@ -72,6 +72,7 @@ struct Player {
     board_rev: Option<u32>,
     place: u8,
     target: Option<u8>,
+    target_mode: TargetMode,
     /// 이번 판에 쓰러뜨린 상대 수 (KO)
     kos: u32,
     /// 마지막으로 나에게 공격을 보낸 플레이어 → 내가 탈락하면 그 사람의 KO
@@ -257,6 +258,7 @@ impl Room {
             place: 0,
             target: None,
             kos: 0,
+            target_mode: TargetMode::Random,
             last_attacker: None,
             chat_times: VecDeque::new(),
             rounds: 0,
@@ -342,6 +344,12 @@ impl Room {
             ClientMsg::AttachProfile { token } => {
                 if self.phase == Phase::Lobby && crate::profile::exists(&token) {
                     if let Some(p) = self.players.iter_mut().find(|p| p.id == id) { p.profile = Some(token); }
+                }
+            }
+            ClientMsg::SetTargetMode { mode } => {
+                if let Some(p) = self.players.iter_mut().find(|p| p.id == id && p.bot.is_none()) {
+                    p.target_mode = mode;
+                    p.target = None;
                 }
             }
             ClientMsg::SetCoop { enabled } if is_host && self.phase == Phase::Lobby => {
@@ -472,6 +480,30 @@ impl Room {
         let team = self.players.iter().find(|p| p.id == from).map(|p| p.team);
         self.players.iter().filter(|p| p.alive() && p.id != from &&
             (!self.config.teams || Some(p.team) != team)).map(|p| p.id).collect()
+    }
+
+    /// `alive` 는 비어 있지 않은 공격 가능 대상 목록이다.
+    fn choose_target(&mut self, from: u8, alive: &[u8]) -> u8 {
+        let Some(src) = self.players.iter().find(|q| q.id == from) else { return alive[0] };
+        let (mode, cur, last_attacker) = (src.target_mode, src.target, src.last_attacker);
+        let sticky = |room: &mut Self| match cur {
+            Some(t) if alive.contains(&t) => t,
+            _ => alive[room.rng.below(alive.len() as u32) as usize],
+        };
+        match mode {
+            TargetMode::Random => sticky(self),
+            TargetMode::Danger => {
+                let danger = |id: u8| self.players.iter().find(|q| q.id == id)
+                    .and_then(|q| q.game.as_ref()).map_or(0, |g| g.stack_height() as u32 + g.pending_total());
+                // 같은 값이면 앞 번호를 고른다 (max_by_key 는 마지막 최대값을 돌려주므로 역순으로 본다).
+                alive.iter().rev().copied().max_by_key(|&id| danger(id)).unwrap_or(alive[0])
+            }
+            TargetMode::Counter => {
+                if let Some(t) = last_attacker.filter(|t| alive.contains(t)) { return t; }
+                let aiming = alive.iter().copied().find(|&id| self.players.iter().any(|q| q.id == id && q.target == Some(from)));
+                aiming.unwrap_or_else(|| sticky(self))
+            }
+        }
     }
 
     fn round_player(p: &Player) -> RoundPlayer {
@@ -639,11 +671,7 @@ impl Room {
                 event.sent = 0;
                 continue;
             }
-            let cur = self.players.iter().find(|q| q.id == from).and_then(|q| q.target);
-            let target = match cur {
-                Some(t) if alive.contains(&t) => t,
-                _ => alive[self.rng.below(alive.len() as u32) as usize],
-            };
+            let target = self.choose_target(from, &alive);
             event.target = Some(target);
             if let Some(src) = self.players.iter_mut().find(|q| q.id == from) {
                 src.target = Some(target);
@@ -1025,6 +1053,33 @@ mod tests {
         let legacy = drain(&mut receivers[1]);
         assert!(legacy.iter().any(|m| matches!(m, ServerMsg::YourState { .. })));
         assert!(!legacy.iter().any(|m| matches!(m, ServerMsg::YourStateV2 { .. })));
+    }
+
+    #[test]
+    fn target_modes_pick_danger_and_counter_targets() {
+        let (mut room, _receivers) = fixture(4);
+        room.start(); room.phase = Phase::Playing;
+        let alive = [2, 3, 4];
+        // 위험한 상대: 쌓인 높이 + 받을 공격이 가장 큰 3번
+        room.on_msg(1, ClientMsg::SetTargetMode { mode: TargetMode::Danger });
+        room.players[2].game.as_mut().unwrap().receive_garbage(6);
+        room.players[3].game.as_mut().unwrap().receive_garbage(2);
+        assert_eq!(room.choose_target(1, &alive), 3);
+        // 반격: 마지막으로 나를 공격한 4번, 없으면 나를 노리는 2번
+        room.on_msg(1, ClientMsg::SetTargetMode { mode: TargetMode::Counter });
+        room.players[0].last_attacker = Some(4);
+        assert_eq!(room.choose_target(1, &alive), 4);
+        room.players[0].last_attacker = None;
+        room.players[1].target = Some(1);
+        assert_eq!(room.choose_target(1, &alive), 2);
+        // 탈락한 공격자는 고르지 않는다.
+        room.players[0].last_attacker = Some(4);
+        assert_eq!(room.choose_target(1, &[2, 3]), 2);
+        // 기본값(무작위)은 한 번 고른 상대를 유지한다.
+        room.on_msg(1, ClientMsg::SetTargetMode { mode: TargetMode::Random });
+        assert_eq!(room.players[0].target, None, "changing mode clears the sticky target");
+        room.players[0].target = Some(3);
+        assert_eq!(room.choose_target(1, &alive), 3);
     }
 
     #[test]

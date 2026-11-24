@@ -30,6 +30,20 @@ pub enum ClientMsg {
     EnableCombat,
     AttachProfile { token: String },
     SetCoop { enabled: bool },
+    /// 내 공격을 누구에게 보낼지. 새 값은 항상 맨 뒤에 붙인다.
+    SetTargetMode { mode: TargetMode },
+}
+
+/// 공격 대상 선택 방식
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TargetMode {
+    /// 무작위로 고른 상대를 그 상대가 탈락할 때까지 유지 (기존 동작)
+    #[default]
+    Random,
+    /// 쌓인 높이와 받을 공격의 합이 가장 큰 상대
+    Danger,
+    /// 나를 마지막으로 공격한 상대, 없으면 나를 노리는 상대, 그것도 없으면 무작위
+    Counter,
 }
 
 /// 채팅 한 줄
@@ -313,6 +327,7 @@ mod tests {
         let rooms = ServerMsg::CoopRooms(vec!["ABC".into()]);
         assert_eq!(encode(&rooms)[0],23); assert_eq!(decode::<ServerMsg>(&encode(&rooms)),Some(rooms));
         assert_eq!(encode(&ServerMsg::CombatStatus(vec![])),vec![21,0]);
+        assert_eq!(encode(&ClientMsg::SetTargetMode { mode: TargetMode::Counter }),vec![14,2]);
     }
 
     #[test]

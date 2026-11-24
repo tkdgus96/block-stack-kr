@@ -1,6 +1,6 @@
 //! Server-authoritative clock and per-player attack statistics, shared by both themes.
 use crate::runtime::Ui;
-use bs_engine::protocol::Phase;
+use bs_engine::protocol::{ClientMsg, Phase, TargetMode};
 use leptos::prelude::*;
 
 pub(crate) fn apm(ui: Ui, id: u8) -> String {
@@ -98,6 +98,37 @@ pub(crate) fn MatchResults(ui: Ui) -> impl IntoView {
                 </tbody></table></div>
                 <div class="result-rematch"><crate::room_controls::ReadyButton ui=ui/><span>"모두 준비하면 같은 멤버로 다시 시작합니다."</span></div>
             </section>
+        </Show>
+    }
+}
+
+const TARGET_MODES: [(TargetMode, &str, &str); 3] = [
+    (TargetMode::Random, "무작위", "무작위로 고른 상대를 그 상대가 탈락할 때까지 공격합니다."),
+    (TargetMode::Danger, "위험한 상대", "쌓인 높이와 받을 공격이 가장 많은 상대를 공격합니다."),
+    (TargetMode::Counter, "반격", "나를 마지막으로 공격한 상대를 공격합니다. 없으면 나를 노리는 상대, 그것도 없으면 무작위입니다."),
+];
+
+/// 3인 이상 개인전·팀전에서만 보이는 공격 대상 선택
+#[component]
+pub(crate) fn TargetModeSelect(ui: Ui) -> impl IntoView {
+    let visible = move || ui.players.with(|p| p.len() >= 3) && !ui.coop.get().enabled;
+    let hint = move || TARGET_MODES.iter().find(|m| m.0 == ui.target_mode.get()).map_or("", |m| m.2);
+    view! {
+        <Show when=visible>
+            <label class="target-mode" title=hint>
+                <span>"공격 대상"</span>
+                <select aria-label="공격 대상 선택" on:change=move |ev| {
+                    let i: usize = event_target_value(&ev).parse().unwrap_or(0);
+                    let mode = TARGET_MODES.get(i).map_or(TargetMode::Random, |m| m.0);
+                    ui.target_mode.set(mode);
+                    crate::runtime::send(ClientMsg::SetTargetMode { mode });
+                }>
+                    {TARGET_MODES.iter().enumerate().map(|(i, (mode, label, _))| {
+                        let mode = *mode;
+                        view! { <option value=i.to_string() selected=move || ui.target_mode.get() == mode>{*label}</option> }
+                    }).collect_view()}
+                </select>
+            </label>
         </Show>
     }
 }

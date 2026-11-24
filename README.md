@@ -13,7 +13,7 @@
 
 게임판 아래에는 현재 **COMBO / B2B**가 유지되고, 공격할 때 기술명과 **생성·상쇄·실제 전송** 줄 수가 표시됩니다. 연속 삭제 다음부터 1 COMBO이며 줄을 지우지 못하면 콤보가 끊깁니다. 높은 콤보는 색과 숫자 크기로 구분합니다. 실제 공격을 받는 상대 게임판과 내 공격 게이지를 짧게 강조합니다. 모바일과 업무 화면에서도 같은 상태를 보여줍니다.
 
-T-Spin Full/미니, 테트리스, B2B, 퍼펙트 클리어를 판정합니다. Full 싱글/더블/트리플의 기본 공격은 2/4/6줄이며, 두 번째 연속 특수 줄 삭제부터 B2B +1이 붙습니다. 콤보 공격과 PC +4를 합산한 뒤 대기 중 공격부터 상쇄합니다. 회전은 전이별 SRS 보정을 사용합니다. 상세한 판정·점수·예외는 [docs/ATTACK_RULES.md](docs/ATTACK_RULES.md)를 참고하세요.
+T-Spin Full/미니, 테트리스, B2B, 퍼펙트 클리어를 판정합니다. Full 싱글/더블/트리플의 기본 공격은 2/4/6줄이며, 두 번째 연속 특수 줄 삭제부터 B2B +1이 붙습니다. 콤보 공격과 PC +4를 합산한 뒤 대기 중 공격부터 상쇄합니다. 받은 공격은 0.5초가 지나야 게임판에 올라오므로 그 사이에 줄을 지우면 상쇄할 수 있습니다. 3인 이상 방에서는 공격 대상 방식(무작위, 위험한 상대, 반격)을 고를 수 있습니다. 회전은 전이별 SRS 보정을 사용합니다. 상세한 판정·점수·예외는 [docs/ATTACK_RULES.md](docs/ATTACK_RULES.md)를 참고하세요.
 
 ## 대결과 성장
 
@@ -90,6 +90,7 @@ python3 tools/smoke_evolution.py --url http://localhost:3000  # 결과·재대�
 python3 tools/smoke_touch_settings.py --url http://localhost:3000  # 터치 설정·저장·실제 조작
 python3 tools/smoke_combat.py --url http://localhost:3000  # 전투 패킷 UI fixture: 기술명·콤보·강조·모바일
 python3 tools/smoke_handling.py --url http://localhost:3000  # 180도 회전·즉시 내리기·ARR 0 유지·경쟁용 프리셋
+python3 tools/smoke_battle_rules.py --url http://localhost:3000  # 3인 방 공격 대상 선택·곧 올라올 공격 표시
 python tools/measure.py   # 실제 Edge/Chrome 으로 성능 측정 (서버 실행 필요, pip install playwright psutil)
 ```
 

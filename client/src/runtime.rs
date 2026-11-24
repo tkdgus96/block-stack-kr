@@ -14,7 +14,7 @@ use crate::settings::{RendererKind, Settings, Theme};
 use crate::sound::{self, Sfx};
 use bs_engine::bot;
 use bs_engine::game::{unpack_cells, Game, Input, HEIGHT, PREVIEW, VISIBLE, VISIBLE_CELLS, WIDTH};
-use bs_engine::protocol::{decode, encode, CombatEvent, CombatStatus, BattleStat, MatchSummary, MemberState, RoomConfig, ChatLine, ClientMsg, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg};
+use bs_engine::protocol::{decode, encode, TargetMode, CombatEvent, CombatStatus, BattleStat, MatchSummary, MemberState, RoomConfig, ChatLine, ClientMsg, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg};
 use bs_engine::Kind;
 use leptos::prelude::*;
 use std::cell::RefCell;
@@ -83,6 +83,9 @@ pub struct Ui {
     pub replay: RwSignal<Option<crate::replay::Replay>>,
     pub coop: RwSignal<bs_engine::protocol::CoopState>,
     pub coop_rooms: RwSignal<Vec<String>>,
+    /// 내가 받을 공격 중 도착 시각이 지나 다음 고정 때 올라올 줄 수
+    pub incoming_ready: RwSignal<u32>,
+    pub target_mode: RwSignal<TargetMode>,
 }
 
 impl Ui {
@@ -120,6 +123,8 @@ impl Ui {
             replay: RwSignal::new(crate::replay::Replay::load()),
             coop: RwSignal::new(Default::default()),
             coop_rooms: RwSignal::new(Vec::new()),
+            incoming_ready: RwSignal::new(0),
+            target_mode: RwSignal::new(TargetMode::Random),
         }
     }
 }
@@ -633,6 +638,10 @@ impl Core {
                 self.release_all();
                 self.combat_v2 = false;
                 self.combat_floor = 0;
+                self.ui.incoming_ready.set(0);
+                // 서버는 접속마다 새 플레이어를 만드므로 고른 공격 대상 방식을 다시 알린다.
+                let mode = self.ui.target_mode.get_untracked();
+                if mode != TargetMode::Random { self.send(&ClientMsg::SetTargetMode { mode }); }
                 self.combat_seen.clear();
                 self.ui.combat_feed.set(VecDeque::new());
                 self.ui.combat_states.set(Vec::new());
@@ -746,6 +755,8 @@ impl Core {
             ServerMsg::YourStateV2 { ack, mut game, combat } => {
                 self.combat_v2 = true;
                 game.combat = combat;
+                let ready: u32 = game.pending_schedule().iter().filter(|&&(_, at)| at <= game.elapsed).map(|&(n, _)| n as u32).sum();
+                if self.ui.incoming_ready.get_untracked() != ready { self.ui.incoming_ready.set(ready); }
                 self.ui.combat_states.update(|states| {
                     let state = CombatStatus { id: self.me, combo: game.combo, b2b: game.combat.back_to_back };
                     if let Some(old) = states.iter_mut().find(|s| s.id == self.me) { *old = state; } else { states.push(state); }

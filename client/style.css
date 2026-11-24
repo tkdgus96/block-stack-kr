@@ -671,3 +671,11 @@ input, select { border: 1px solid var(--line); border-radius: 2px; padding: 1px 
 }
 @media (prefers-reduced-motion:reduce) { .anim .combat-card { animation:none; } }
 .combat-opp-chain { min-height:13px; margin-top:5px; font-size:9px; font-weight:800; color:#ffd080; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* 받을 공격: 노란 부분은 대기 시간이 지나 다음 고정 때 올라올 줄 */
+.theme-arcade .meter { position: relative; }
+.theme-arcade .meter-fill.ready, .theme-arcade .arc .meter-fill.ready { position: absolute; left: 0; right: 0; bottom: 0; background: #ffd166; }
+.arc-incoming-ready { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.arc-incoming-ready.hot b { color: #ffd166; }
+.target-mode { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; font-size: 12px; color: var(--muted); }
+.target-mode select { background: #0f1729; color: var(--text); border: 1px solid #2a3850; border-radius: 4px; padding: 2px 4px; font: inherit; }
