@@ -1,6 +1,7 @@
 //! Block Stack 서버: 정적 파일(WASM 클라이언트) 제공 + WebSocket 대전.
 
 mod room;
+mod profile;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -8,7 +9,7 @@ use axum::http::{header, HeaderValue};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use bs_engine::protocol::{decode, encode, ClientMsg, RoomSummary, ServerMsg, MAX_NAME_LEN};
+use bs_engine::protocol::{decode, encode, ClientMsg, RoomConfig, RoomSummary, ServerMsg, MAX_NAME_LEN};
 use futures_util::{SinkExt, StreamExt};
 use room::{spawn_room, Outbox, Registry, RoomCmd, RoomEntry};
 
@@ -19,6 +20,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 #[tokio::main]
 async fn main() {
+    profile::initialize().expect("profile storage must be writable (BS_DATA_DIR)");
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);
     let dist = std::env::var("BS_DIST").unwrap_or_else(|_| "client/dist".into());
     let registry: Registry = Default::default();
@@ -27,14 +29,18 @@ async fn main() {
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }))
+        .merge(profile::router())
         .fallback_service(static_files)
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
         .with_state(registry);
 
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    let addr: std::net::SocketAddr = match std::env::var("BS_BIND") {
+        Ok(bind) => bind.parse().expect("BS_BIND must be an IP address and port, e.g. 127.0.0.1:3010"),
+        Err(_) => std::net::SocketAddr::from(([0, 0, 0, 0], port)),
+    };
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
-    println!("Block Stack 서버: http://localhost:{port}  (정적 파일: {dist})");
+    println!("Block Stack 서버: http://{addr}  (정적 파일: {dist})");
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -69,7 +75,7 @@ fn room_sender(reg: &Registry, code: &str) -> mpsc::Sender<RoomCmd> {
         Some(e) if !e.tx.is_closed() => e.tx.clone(),
         _ => {
             let tx = spawn_room(code.to_string(), reg.clone());
-            map.insert(code.to_string(), RoomEntry { tx: tx.clone(), summary: RoomSummary { code: code.to_string(), ..Default::default() } });
+            map.insert(code.to_string(), RoomEntry { config: RoomConfig::default(), public: true, coop: false, tx: tx.clone(), summary: RoomSummary { code: code.to_string(), ..Default::default() } });
             tx
         }
     }
@@ -78,17 +84,38 @@ fn room_sender(reg: &Registry, code: &str) -> mpsc::Sender<RoomCmd> {
 /// 현재 열린 방 목록: 사람이 있는 방만, 대기 중인 방 → 사람 많은 순
 const MAX_LISTED_ROOMS: usize = 50;
 
-fn list_rooms(reg: &Registry) -> Vec<RoomSummary> {
+fn listed_entries(reg: &Registry) -> Vec<(RoomSummary, RoomConfig)> {
     let map = reg.lock().unwrap();
-    let mut v: Vec<RoomSummary> =
-        map.values().filter(|e| !e.tx.is_closed() && e.summary.humans > 0).map(|e| e.summary.clone()).collect();
-    v.sort_by(|a, b| a.playing.cmp(&b.playing).then(b.humans.cmp(&a.humans)).then(a.code.cmp(&b.code)));
-    v.truncate(MAX_LISTED_ROOMS);
-    v
+    let mut entries: Vec<_> = map.values()
+        .filter(|e| e.public && !e.tx.is_closed() && e.summary.humans > 0)
+        .map(|e| (e.summary.clone(), e.config.clone())).collect();
+    entries.sort_by(|(a, _), (b, _)| a.playing.cmp(&b.playing).then(b.humans.cmp(&a.humans)).then(a.code.cmp(&b.code)));
+    entries.truncate(MAX_LISTED_ROOMS);
+    entries
 }
 
-fn rooms_msg(reg: &Registry) -> axum::body::Bytes {
-    axum::body::Bytes::from(encode(&ServerMsg::Rooms(list_rooms(reg))))
+#[cfg(test)]
+fn list_rooms(reg: &Registry) -> Vec<RoomSummary> {
+    listed_entries(reg).into_iter().map(|(summary, _)| summary).collect()
+}
+
+fn room_rules_msg(entries: &[(RoomSummary, RoomConfig)]) -> axum::body::Bytes {
+    axum::body::Bytes::from(encode(&ServerMsg::RoomRules(entries.iter().map(|(s, c)| (s.code.clone(), c.clone())).collect())))
+}
+
+fn rooms_msg(entries: &[(RoomSummary, RoomConfig)]) -> axum::body::Bytes {
+    axum::body::Bytes::from(encode(&ServerMsg::Rooms(entries.iter().map(|(s, _)| s.clone()).collect())))
+}
+
+fn send_room_list(reg: &Registry, out: &Outbox) {
+    let entries = listed_entries(reg);
+    let coop: Vec<_> = { let map = reg.lock().unwrap(); entries.iter().filter(|(s,_)| map.get(&s.code).is_some_and(|e| e.coop)).map(|(s,_)| s.code.clone()).collect() };
+    // Reserve all slots so a slow client receives one complete snapshot.
+    if let Ok(mut permits) = out.try_reserve_many(3) {
+        permits.next().unwrap().send(axum::body::Bytes::from(encode(&ServerMsg::CoopRooms(coop))));
+        permits.next().unwrap().send(room_rules_msg(&entries));
+        permits.next().unwrap().send(rooms_msg(&entries));
+    }
 }
 
 async fn handle_socket(socket: WebSocket, reg: Registry) {
@@ -114,7 +141,7 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
         let (room, name) = match decode::<ClientMsg>(&b) {
             Some(ClientMsg::Join { room, name }) => (room, name),
             Some(ClientMsg::ListRooms) => {
-                let _ = out_tx.try_send(rooms_msg(&reg));
+                send_room_list(&reg, &out_tx);
                 continue;
             }
             _ => continue,
@@ -158,7 +185,7 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
                 if let Some(m) = decode::<ClientMsg>(&b) {
                     // 방 목록은 방 태스크를 거치지 않고 레지스트리에서 바로 응답
                     if m == ClientMsg::ListRooms {
-                        let _ = out_tx.try_send(rooms_msg(&reg));
+                        send_room_list(&reg, &out_tx);
                         continue;
                     }
                     if room_tx.send(RoomCmd::Msg { id, msg: m }).await.is_err() {
@@ -183,6 +210,41 @@ mod tests {
         let (rtx, rrx) = oneshot::channel();
         room_sender(reg, code).send(RoomCmd::Join { name: name.into(), tx, reply: rtx }).await.unwrap();
         (rx, rrx.await.unwrap().unwrap())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rules_and_rooms_share_selection_privacy_order_and_clear_empty_snapshots() {
+        use bs_engine::protocol::decode;
+        let reg: Registry = Default::default();
+        let (_host, id) = join(&reg, "PUBLIC", "host").await;
+        let config = RoomConfig { max_players: 4, teams: true, duration_secs: 60, ..Default::default() };
+        room_sender(&reg, "PUBLIC").send(RoomCmd::Msg { id, msg: ClientMsg::SetRoomConfig(config.clone()) }).await.unwrap();
+        let (_hidden, hidden_id) = join(&reg, "HIDDEN", "hidden").await;
+        room_sender(&reg, "HIDDEN").send(RoomCmd::Msg { id: hidden_id, msg: ClientMsg::SetRoomConfig(RoomConfig { public: false, ..Default::default() }) }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let (out, mut rx) = mpsc::channel(8);
+        send_room_list(&reg, &out);
+        assert_eq!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::CoopRooms(vec![])));
+        assert_eq!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::RoomRules(vec![("PUBLIC".into(), config)])));
+        assert!(matches!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::Rooms(v)) if v.len() == 1 && v[0].code == "PUBLIC"));
+        let empty: Registry = Default::default();
+        send_room_list(&empty, &out);
+        assert_eq!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::CoopRooms(vec![])));
+        assert_eq!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::RoomRules(vec![])));
+        assert_eq!(decode::<ServerMsg>(&rx.recv().await.unwrap()), Some(ServerMsg::Rooms(vec![])));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn private_room_is_hidden_but_code_join_remains_available() {
+        use bs_engine::protocol::RoomConfig;
+        let reg: Registry = Default::default();
+        let (_host, id) = join(&reg, "PRIVATE", "host").await;
+        room_sender(&reg, "PRIVATE").send(RoomCmd::Msg { id, msg: ClientMsg::SetRoomConfig(RoomConfig { public: false, ..Default::default() }) }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(list_rooms(&reg).is_empty());
+        let (_guest, _) = join(&reg, "PRIVATE", "guest").await;
+        assert_eq!(reg.lock().unwrap().get("PRIVATE").unwrap().summary.humans, 2);
+        assert!(list_rooms(&reg).is_empty());
     }
 
     #[tokio::test(start_paused = true)]

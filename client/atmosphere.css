@@ -1,0 +1,7 @@
+/* No polling, flashing, or continuous animations: game events change a static glow. */
+.arc-atmosphere { display:none; position:fixed; inset:0; z-index:5; pointer-events:none; opacity:0; background:radial-gradient(ellipse at center,transparent 55%,#227b6918); }
+.theme-arcade.anim:not(.low) .arc-atmosphere.enabled { display:block; opacity:1; transition:background 450ms ease; }
+.theme-arcade.anim .arc-atmosphere.combo { background:radial-gradient(ellipse at center,transparent 55%,#9348cf25); }
+.theme-arcade.anim .arc-atmosphere.urgent { background:radial-gradient(ellipse at center,transparent 55%,#c58e212a); }
+.theme-arcade.anim .arc-atmosphere.danger { background:radial-gradient(ellipse at center,transparent 55%,#dc44502f); }
+@media (prefers-reduced-motion:reduce) { .arc-atmosphere { display:none !important; transition:none !important; } }

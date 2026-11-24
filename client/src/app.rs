@@ -6,7 +6,7 @@
 
 use crate::runtime::{self as core, Conn, Ui};
 use crate::settings::{key_label, RendererKind, Settings, Theme, ACTIONS};
-use bs_engine::protocol::{ClientMsg, Phase, PlayerInfo, PlayerStat, MAX_PLAYERS};
+use bs_engine::protocol::{ClientMsg, Phase, PlayerInfo, PlayerStat, MAX_CHAT_LEN};
 use leptos::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16,6 +16,8 @@ pub(crate) enum Tab {
     Help,
     Log,
     Rooms,
+    Records,
+    Practice,
 }
 
 #[component]
@@ -50,7 +52,7 @@ pub fn App() -> impl IntoView {
 
     // 방 목록 탭을 열 때마다 서버에 최신 목록 요청
     Effect::new(move |_| {
-        if tab.get() == Tab::Rooms {
+        if tab.get() == Tab::Rooms && ui.conn.get() == Conn::Open {
             core::send(ClientMsg::ListRooms);
         }
     });
@@ -59,6 +61,7 @@ pub fn App() -> impl IntoView {
     // 렌더러가 다음 프레임에 새 컨테이너를 찾아 다시 그린다 (runtime::ensure_board).
     let arcade = move || ui.settings.with(|s| s.theme == Theme::Arcade);
     view! {
+        <crate::atmosphere::Atmosphere ui=ui/>
         <Show when=arcade fallback=move || view! { <SheetShell ui=ui tab=tab/> }>
             <crate::arcade::ArcadeShell ui=ui tab=tab/>
         </Show>
@@ -75,7 +78,14 @@ fn SheetShell(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
             <main class="workspace">
                 <section class="sheet-area">
                     <div class:hidden=move || tab.get() != Tab::Game>
+                        <crate::room_controls::LobbyPresence ui=ui/>
+                        <crate::battle::MatchResults ui=ui/>
+                        <crate::battle::MatchClock ui=ui/>
                         <GameSheet ui=ui/>
+                        <crate::combat::CombatPanel ui=ui/>
+                        <crate::touch::TouchControls ui=ui/>
+                        <crate::battle::AttackStats ui=ui/>
+                        <crate::room_controls::RoomControls ui=ui/><crate::coop::CoopPanel ui=ui/>
                     </div>
                     <div class:hidden=move || tab.get() != Tab::Settings>
                         <SettingsSheet ui=ui/>
@@ -86,6 +96,9 @@ fn SheetShell(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                     <div class:hidden=move || tab.get() != Tab::Rooms>
                         <RoomsSheet ui=ui tab=tab/>
                     </div>
+                    <div class:hidden=move || tab.get() != Tab::Records><crate::records::PersonalRecords ui=ui/><crate::profile::ProfilePanel/><crate::replay::ReplayPanel ui=ui/></div>
+                    <Show when=move || tab.get() == Tab::Practice && ui.phase.get() != Phase::Lobby><p>"경기 중입니다. 대전 화면에서 현재 경기를 마친 뒤 연습실을 이용하세요."</p></Show>
+                    <Show when=move || tab.get() == Tab::Practice && ui.phase.get() == Phase::Lobby><crate::practice::PracticeLab/></Show>
                     <div class:hidden=move || tab.get() != Tab::Log>
                         <LogSheet ui=ui/>
                     </div>
@@ -139,7 +152,7 @@ fn MenuBar(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
     let code = RwSignal::new(String::new());
     let is_host = move || ui.host.get() == ui.me.get() && ui.me.get() != 0;
     let lobby = move || ui.phase.get() == Phase::Lobby;
-    let can_start = move || is_host() && lobby() && ui.conn.get() == Conn::Open;
+    let can_start = move || crate::room_controls::can_start(ui);
     view! {
         <nav class="menubar">
             <button on:click=move |_| core::join_room("")>"새 방"</button>
@@ -177,6 +190,8 @@ fn MenuBar(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
             </button>
             <button on:click=move |_| tab.set(Tab::Settings)>"설정"</button>
             <button on:click=move |_| tab.set(Tab::Rooms)>"방 목록"</button>
+            <button on:click=move |_| tab.set(Tab::Practice)>"연습실"</button>
+            <button on:click=move |_| tab.set(Tab::Records)>"개인 기록"</button>
             <button on:click=move |_| tab.set(Tab::Help)>"도움말"</button>
             <span class="spacer"></span>
             <span class="muted">
@@ -393,9 +408,9 @@ pub(crate) fn SettingsSheet(ui: Ui) -> impl IntoView {
                             };
                             set(&|x: &mut Settings| x.theme = t);
                         }>
-                            <option value="sheet" selected=move || s().theme == Theme::Sheet>"Spreadsheet Mode (기본)"</option>
+                            <option value="sheet" selected=move || s().theme == Theme::Sheet>"Spreadsheet Mode"</option>
                             <option value="hc" selected=move || s().theme == Theme::HighContrast>"고대비 모드"</option>
-                            <option value="arcade" selected=move || s().theme == Theme::Arcade>"아케이드 모드"</option>
+                            <option value="arcade" selected=move || s().theme == Theme::Arcade>"아케이드 모드 (기본)"</option>
                         </select>
                     </td>
                     <td class="muted">"고대비: 진한 색상과 검은 테두리 · 아케이드: 어두운 배경, 선명한 입체 블록, 공격 게이지"</td>
@@ -446,6 +461,7 @@ pub(crate) fn SettingsSheet(ui: Ui) -> impl IntoView {
                     <td class="muted">"다음 접속부터 적용 "<button class="link" on:click=move |_| core::reconnect()>"지금 다시 접속"</button></td>
                 </tr>
             </table>
+            <crate::mobile_settings::MobileSettings ui=ui/>
             <h3 class="sheet-h">"키보드 조작"</h3>
             <table class="grid-table form">
                 <tr class="colhead"><th>"동작"</th><th>"키"</th><th></th></tr>
@@ -482,7 +498,10 @@ pub(crate) fn HelpSheet(ui: Ui) -> impl IntoView {
                 <tr class="colhead"><th>"항목"</th><th>"내용"</th></tr>
                 <tr><th>"목표"</th><td>"가로 한 줄을 채우면 줄이 지워집니다. 두 줄 이상 지우면 상대에게 방해줄을 보냅니다."</td></tr>
                 <tr><th>"방어"</th><td>"받을 공격이 쌓여 있을 때 줄을 지우면 먼저 상쇄합니다. 상쇄하지 못한 줄은 다음 블록을 고정할 때 아래에서 올라옵니다."</td></tr>
-                <tr><th>"공격량"</th><td>"2줄=1, 3줄=2, 4줄=4, 연속 삭제 보너스, 판 전체 비우기 +4"</td></tr>
+                <tr><th>"대결 시간"</th><td>"대결은 기본 2분이며 방장이 1·2·3분을 선택할 수 있습니다. 개인전은 한 명 생존 시, 팀전은 한 팀만 생존 시 조기 종료합니다. 시간 종료 시 생존자 수·공격·KO·점수 순으로 결정하며 동률은 공동 순위입니다. 1인 연습은 무제한입니다."</td></tr>
+                <tr><th>"모바일"</th><td>"게임판 아래 터치 버튼으로 조작합니다. 이동과 내리기는 길게 누를 수 있고, 이동과 회전을 동시에 누를 수 있습니다."</td></tr>
+                <tr><th>"공격 피드백"</th><td>"첫 삭제 다음 연속 삭제부터 1 COMBO입니다. 줄을 못 지우면 콤보가 끊깁니다. B2B는 일반 1~3줄 삭제에 끊기고 줄 삭제 없는 고정에는 유지됩니다. 기술명 아래 생성·상쇄·실제 전송 줄 수를 구분해 표시합니다."</td></tr>
+                <tr><th>"공격량"</th><td>"일반 2/3/4줄 삭제는 공격 1/2/4줄. T스핀 싱글/더블/트리플은 2/4/6줄, 미니 싱글 기본 공격은 0줄입니다. 두 번째 연속 테트리스·T스핀 줄 삭제부터 B2B +1, 콤보 추가 공격과 퍼펙트 클리어 +4를 합산한 뒤 받을 공격부터 상쇄합니다."</td></tr>
                 <tr><th>"승리"</th><td>"블록이 맨 위를 넘으면 탈락합니다. 마지막까지 남은 사람이 승리합니다 (2~6명)."</td></tr>
                 <tr><th>"초대"</th><td>"상단의 '링크 복사'로 같은 방 주소를 공유하세요."</td></tr>
                 <tr><th>"기본 조작"</th><td>"← → 이동 · ↓ 천천히 · Space 바로 내리기 · ↑/X 회전 · Z 반대 회전 · C 보관"</td></tr>
@@ -496,24 +515,33 @@ pub(crate) fn HelpSheet(ui: Ui) -> impl IntoView {
 pub(crate) fn ChatPanel(ui: Ui) -> impl IntoView {
     let text = RwSignal::new(String::new());
     let list_ref = NodeRef::<leptos::html::Div>::new();
+    let follow_latest = RwSignal::new(true);
+    let connected = move || ui.conn.get() == Conn::Open && ui.me.get() != 0;
     // 새 메시지가 오면 맨 아래로 스크롤 (DOM 갱신 후 다음 프레임에 1회)
     Effect::new(move |_| {
         ui.chat.track();
         request_animation_frame(move || {
             if let Some(el) = list_ref.get_untracked() {
-                el.set_scroll_top(el.scroll_height());
+                if follow_latest.get_untracked() {
+                    el.set_scroll_top(el.scroll_height());
+                }
             }
         });
     });
     let submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let t = text.get_untracked();
-        if !t.trim().is_empty() {
-            core::send(ClientMsg::Chat { text: t });
+        if connected() && !t.trim().is_empty() {
+            follow_latest.set(true);
+            core::send(ClientMsg::Chat { text: t.trim().chars().take(MAX_CHAT_LEN).collect() });
             text.set(String::new());
         }
     };
     let on_key = move |ev: leptos::ev::KeyboardEvent| {
+        // 한글 조합 완료 Enter가 전송으로 이어지지 않도록 한다.
+        if ev.key() == "Enter" && (ev.is_composing() || ev.key_code() == 229) {
+            ev.prevent_default();
+        }
         // Esc: 입력창을 빠져나와 바로 게임 조작으로
         if ev.key() == "Escape" {
             if let Some(el) = ev.target().and_then(|t| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(t).ok()) {
@@ -524,15 +552,19 @@ pub(crate) fn ChatPanel(ui: Ui) -> impl IntoView {
     view! {
         <div class="chat">
             <div class="chat-head">
-                <span>"채팅"</span>
+                <span>{move || format!("방 {} 채팅", ui.room.get())}</span>
                 <span class="muted small">"Enter 입력 · Esc 게임으로"</span>
             </div>
-            <div class="chat-list" node_ref=list_ref>
+            <div class="chat-list" node_ref=list_ref role="log" aria-label="방 채팅 메시지" aria-live="polite" aria-relevant="additions" on:scroll=move |_| {
+                if let Some(el) = list_ref.get_untracked() {
+                    follow_latest.set(el.scroll_height() - el.scroll_top() - el.client_height() < 48);
+                }
+            }>
                 {move || {
                     let me = ui.me.get();
                     let lines = ui.chat.get();
                     if lines.is_empty() {
-                        return view! { <div class="chat-empty muted">"아직 대화가 없습니다"</div> }.into_any();
+                        return view! { <div class="chat-empty muted">"같은 방의 플레이어에게 인사해 보세요"</div> }.into_any();
                     }
                     lines
                         .iter()
@@ -548,17 +580,22 @@ pub(crate) fn ChatPanel(ui: Ui) -> impl IntoView {
                         .into_any()
                 }}
             </div>
+            <Show when=move || !connected()>
+                <p class="muted small" role="status">"서버 연결 후 채팅을 보낼 수 있습니다."</p>
+            </Show>
             <form class="chat-form" on:submit=submit>
                 <input
                     id="chat-input"
                     autocomplete="off"
-                    maxlength="120"
-                    placeholder="메시지 입력"
+                    maxlength=MAX_CHAT_LEN.to_string()
+                    aria-label="같은 방에 보낼 메시지"
+                    disabled=move || !connected()
+                    placeholder="같은 방에 메시지 보내기"
                     prop:value=move || text.get()
                     on:input=move |ev| text.set(event_target_value(&ev))
                     on:keydown=on_key
                 />
-                <button type="submit">"보내기"</button>
+                <button type="submit" disabled=move || !connected() || text.with(|t| t.trim().is_empty())>"보내기"</button>
             </form>
         </div>
     }
@@ -567,19 +604,33 @@ pub(crate) fn ChatPanel(ui: Ui) -> impl IntoView {
 /// 현재 열린 방 목록 (두 테마 공용)
 #[component]
 pub(crate) fn RoomsSheet(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
-    let refresh = move |_| core::send(ClientMsg::ListRooms);
+    let code = RwSignal::new(String::new());
+    let connected = move || ui.conn.get() == Conn::Open;
+    let refresh = move |_| {
+        if connected() { core::send(ClientMsg::ListRooms); }
+    };
+    let join = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if connected() && !code.get_untracked().trim().is_empty() {
+            core::join_room(&code.get_untracked());
+            tab.set(Tab::Game);
+        }
+    };
     let rows = move || {
         let mine = ui.room.get();
         let list = ui.rooms.get();
         if list.is_empty() {
-            let msg = if ui.rooms_loaded.get() { "열린 방이 없습니다" } else { "불러오는 중…" };
+            let msg = if !connected() { "서버에 연결되면 방 목록을 볼 수 있습니다" }
+                else if ui.rooms_loaded.get() { "열린 방이 없습니다. 새 방을 만들어 친구를 초대해 보세요." }
+                else { "불러오는 중…" };
             return view! { <tr><td colspan="6" class="muted">{msg}</td></tr> }.into_any();
         }
         list.into_iter()
             .map(|r| {
                 let code = r.code.clone();
                 let here = r.code == mine;
-                let full = r.players as usize >= MAX_PLAYERS;
+                let config = ui.room_rules.with(|rules| rules.iter().find(|(code,_)| *code == r.code).map(|(_,config)| config.clone())).unwrap_or_default();
+                let full = r.players >= config.max_players;
                 let (label, enabled) = if here {
                     ("참가 중", false)
                 } else if full {
@@ -592,11 +643,11 @@ pub(crate) fn RoomsSheet(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                     <tr class:me=here>
                         <td class="room-code">{r.code.clone()}</td>
                         <td>{r.host.clone()}</td>
-                        <td class="num">{format!("{}/{}", r.players, MAX_PLAYERS)}</td>
-                        <td class="muted">{format!("사람 {} · 봇 {}", r.humans, r.bots)}</td>
+                        <td class="num">{format!("{}/{}", r.players, config.max_players)}</td>
+                        <td class="muted">{format!("{} · {}분 · 사람 {} · 봇 {}", if ui.coop_rooms.with(|rooms| rooms.contains(&r.code)) { "협동전" } else if config.teams { "팀전" } else { "개인전" }, config.duration_secs/60, r.humans,r.bots)}</td>
                         <td class:playing=r.playing>{state}</td>
                         <td>
-                            <button class="primary" disabled=!enabled on:click=move |_| {
+                            <button class="primary" disabled=move || !enabled || !connected() on:click=move |_| {
                                 core::join_room(&code);
                                 tab.set(Tab::Game);
                             }>{label}</button>
@@ -610,8 +661,20 @@ pub(crate) fn RoomsSheet(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
     };
     view! {
         <div class="sheet-page rooms-page">
+            <h2 class="sheet-h">"함께 플레이할 방 찾기"</h2>
+            <p class="muted small">"대기 중인 방에 참가하거나 새 방을 만드세요. 게임 중인 방에서도 채팅하며 다음 판을 기다릴 수 있습니다."</p>
             <div class="rooms-head">
-                <button on:click=refresh>"새로고침"</button>
+                <button class="primary" disabled=move || !connected() on:click=move |_| {
+                    core::join_room("");
+                    tab.set(Tab::Game);
+                }>"새 방 만들기"</button>
+                <form class="join" on:submit=join>
+                    <input class="code-input" aria-label="참가할 방 코드" placeholder="방 코드" maxlength="8"
+                        prop:value=move || code.get()
+                        on:input=move |ev| code.set(event_target_value(&ev).chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect::<String>().to_ascii_uppercase())/>
+                    <button type="submit" disabled=move || !connected() || code.with(|c| c.trim().is_empty())>"코드로 참가"</button>
+                </form>
+                <button disabled=move || !connected() on:click=refresh>"새로고침"</button>
                 <span class="muted small">"사람이 있는 방만 표시합니다 (대기 중인 방 → 인원 많은 순, 최대 50개)"</span>
             </div>
             <table class="grid-table rooms">
@@ -665,7 +728,9 @@ fn BottomBar(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                 {tab_btn(Tab::Settings, "설정")}
                 {tab_btn(Tab::Help, "도움말")}
                 {tab_btn(Tab::Rooms, "방 목록")}
-                {tab_btn(Tab::Log, "기록")}
+                {tab_btn(Tab::Practice, "연습실")}
+                {tab_btn(Tab::Records, "개인 기록")}
+                {tab_btn(Tab::Log, "로그")}
             </div>
             <div class="statusbar">
                 <span class="st-phase">
