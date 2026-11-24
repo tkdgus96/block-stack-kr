@@ -73,7 +73,7 @@ pub(crate) fn RoomControls(ui: Ui) -> impl IntoView {
                         {(2..=6u8).map(|n| view! { <option value=n.to_string() disabled=move || (draft.get().teams && n != 4 && n != 6) || n < ui.players.with(|p| p.len()) as u8>{format!("{n}명")}</option> }).collect_view()}
                     </select>
                 </label>
-                <label>"봇 난이도"
+                <label title="쉬움: 지금 블록만 보고 놓습니다. 보통: 보관한 블록과 다음 블록까지 봅니다. 어려움: 보통에 더해 바닥에서 밀어 넣기와 T스핀을 찾고 공격을 우선합니다.">"봇 난이도"
                     <select aria-label="봇 난이도" prop:value=move || draft.get().bot_level.to_string()
                         on:change=move |ev| draft.update(|c| c.bot_level = event_target_value(&ev).parse().unwrap_or(1))>
                         <option value="0">"쉬움"</option><option value="1">"보통"</option><option value="2">"어려움"</option>

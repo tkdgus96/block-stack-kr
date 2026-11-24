@@ -5,3 +5,17 @@
 .theme-arcade.anim .arc-atmosphere.urgent { background:radial-gradient(ellipse at center,transparent 55%,#c58e212a); }
 .theme-arcade.anim .arc-atmosphere.danger { background:radial-gradient(ellipse at center,transparent 55%,#dc44502f); }
 @media (prefers-reduced-motion:reduce) { .arc-atmosphere { display:none !important; transition:none !important; } }
+
+/* 줄 삭제 빛, 큰 공격을 받을 때 흔들림. 애니메이션 설정을 켠 아케이드 화면에서만 붙는다. */
+.arc-board-wrap.fx-clear { animation: fx-clear 280ms ease-out; }
+.arc-board-wrap.fx-big-clear { animation: fx-big-clear 280ms ease-out; }
+.arc-board-wrap.fx-shake { animation: fx-shake 320ms cubic-bezier(.36,.07,.19,.97); }
+@keyframes fx-clear { from { box-shadow: 0 0 0 2px #73f7caa0, 0 0 18px #73f7ca70; } to { box-shadow: none; } }
+@keyframes fx-big-clear { from { box-shadow: 0 0 0 3px #ffd166, 0 0 30px #ffd166a0; } to { box-shadow: none; } }
+@keyframes fx-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(3px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+@media (prefers-reduced-motion:reduce) { .arc-board-wrap.fx-clear, .arc-board-wrap.fx-big-clear, .arc-board-wrap.fx-shake { animation: none; } }

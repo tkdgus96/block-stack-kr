@@ -5,6 +5,7 @@ Usage: python3 tools/smoke_competitive.py --url http://localhost:3000
 봇 대체 확인 때문에 약 20초 걸린다.
 """
 import argparse
+import random
 from playwright.sync_api import sync_playwright, expect
 
 
@@ -25,7 +26,8 @@ def main():
     args = parser.parse_args()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel='chrome', headless=True)
-        a, ea = open_page(browser, args.url, 'quick-a')
+        runner = f'quick-{random.randrange(10**6):06d}'
+        a, ea = open_page(browser, args.url, runner)
         b, eb = open_page(browser, args.url, 'quick-b')
         room_a, room_b = a.url, b.url
         assert room_a != room_b
@@ -77,7 +79,8 @@ def main():
             a.keyboard.press('Space')
         expect(lab.locator('.practice-status')).to_contain_text('도전 종료')
         expect(lab.locator('.practice-ranks [role=status]')).to_have_text('서버가 기록을 확인하고 순위표에 반영했습니다.', timeout=10000)
-        expect(lab.locator('.practice-ranks li').first).to_contain_text('quick-a')
+        # 서버 데이터가 남아 있으면 다른 기록이 먼저 있을 수 있으므로 목록 안에 있는지만 본다.
+        expect(lab.locator('.practice-ranks li').filter(has_text=runner)).to_have_count(1)
 
         errors = ea + eb + ec
         assert not errors, errors

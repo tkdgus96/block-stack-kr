@@ -137,6 +137,16 @@ impl Ui {
 
 // ───────────────────────── 유틸 ─────────────────────────
 
+thread_local! {
+    /// 방에 들어갈 때 쓴 이름. 설정에 이름이 없으면 자동으로 만든 이름이다.
+    static DISPLAY_NAME: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// 다른 사람에게 보이는 내 이름 (순위표 등록에도 쓴다)
+pub fn display_name() -> String {
+    DISPLAY_NAME.with(|n| n.borrow().clone())
+}
+
 pub fn now() -> f64 {
     web_sys::window().and_then(|w| w.performance()).map(|p| p.now()).unwrap_or(0.0)
 }
@@ -594,6 +604,7 @@ impl Core {
                 if name.is_empty() {
                     name = format!("사용자{:02}", (js_sys::Math::random() * 100.0) as u32);
                 }
+                DISPLAY_NAME.with(|n| *n.borrow_mut() = name.clone());
                 c.send(&ClientMsg::Join { room: c.want_room.clone(), name });
             });
         });

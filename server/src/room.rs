@@ -680,7 +680,7 @@ impl Room {
                     evs.push((event, game.stats.pieces));
                     brain.wait = match self.config.bot_level { 0 => 10, 2 => 2, _ => 5 };
                 } else {
-                    brain.plan = bot::plan_with(game, &brain.style).into();
+                    brain.plan = bot::plan_level(game, &brain.style, self.config.bot_level).into();
                     brain.wait = brain.think;
                 }
             } else {

@@ -93,6 +93,7 @@ python3 tools/smoke_handling.py --url http://localhost:3000  # 180도 회전·�
 python3 tools/smoke_battle_rules.py --url http://localhost:3000  # 3인 방 공격 대상 선택·곧 올라올 공격 표시
 python3 tools/smoke_practice_modes.py --url http://localhost:3000  # 마라톤·Zen·퍼즐·키 입력 실수 표시
 python3 tools/smoke_competitive.py --url http://localhost:3000  # 빠른 대전·봇 대체·전체 리플레이 공유·서버 순위표 (약 20초)
+python3 tools/smoke_effects.py --url http://localhost:3000  # 줄 삭제 빛·큰 공격 흔들림·애니메이션 끔
 python tools/measure.py   # 실제 Edge/Chrome 으로 성능 측정 (서버 실행 필요, pip install playwright psutil)
 ```
 
@@ -101,7 +102,7 @@ python tools/measure.py   # 실제 Edge/Chrome 으로 성능 측정 (서버 실�
 ```
 engine/   순수 Rust 게임 엔진 (의존성: serde + postcard 만)
   game.rs      보드 10×20(+숨김 2줄), 7-bag, 회전 보정, 고정 지연, 줄 삭제, 콤보, 공격/상쇄/방해줄
-  bot.rs       연습봇 (회전×열 전수 평가, 봇마다 다른 가중치)
+  bot.rs       연습봇 (쉬움: 회전×열 평가 / 보통: 보관·다음 블록 / 어려움: 밀어 넣기·T스핀 탐색)
   protocol.rs  WebSocket 메시지 (postcard 바이너리)
 server/   Axum + Tokio
   main.rs      정적 파일(br/gzip 압축) + /ws

@@ -61,7 +61,7 @@ fn submit_rank(s: &Session, status: RwSignal<String>, ranks: RwSignal<Vec<Rank>>
         status.set("서버 프로필(개인 기록 탭)을 만들면 순위표에 등록됩니다.".into());
         return;
     };
-    let name = crate::settings::Settings::load().name;
+    let name = crate::runtime::display_name();
     let body = encode(&LeaderboardSubmission { mode, seed: s.seed, end_tick: s.ticks, name, log: s.log.clone() });
     status.set("순위표에 보내는 중…".into());
     wasm_bindgen_futures::spawn_local(async move {

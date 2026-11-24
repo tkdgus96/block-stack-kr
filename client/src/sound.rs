@@ -62,7 +62,18 @@ pub(crate) fn combat(event: &CombatEvent) {
     } else if event.perfect_clear {
         tone(659.25, 100.0, 0.0);
         tone(987.77, 130.0, 0.08);
+    } else if event.cleared >= 4 {
+        // 테트리스: 올라가는 세 음
+        tone(392.0, 70.0, 0.0);
+        tone(523.25, 70.0, 0.06);
+        tone(659.25, 120.0, 0.12);
     }
+}
+
+/// 큰 공격을 받았을 때 낮은 두 음
+pub(crate) fn heavy_hit() {
+    tone(110.0, 90.0, 0.0);
+    tone(82.41, 140.0, 0.07);
 }
 
 pub(crate) fn final_seconds() {
