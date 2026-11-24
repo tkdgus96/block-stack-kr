@@ -1,5 +1,10 @@
 //! Offline challenges. Their records are deliberately separate from ranked matches.
-use crate::{Active, Events, Game, Input, Kind, SpinKind, HEIGHT, WIDTH};
+use crate::{Active, Events, Game, Input, Kind, SpinKind, HEIGHT, HIDDEN, WIDTH};
+
+/// 퍼즐 좌표는 보이는 판 기준으로 적고 이 값을 더해 실제 행으로 바꾼다.
+const TOP: i8 = HIDDEN as i8;
+/// 새 블록이 나오는 행 (보이는 판 바로 위)
+const SPAWN_Y: i8 = HIDDEN as i8 - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -72,10 +77,11 @@ impl Session {
                     kind: Kind::T,
                     rot: 0,
                     x: 3,
-                    y: 14,
+                    y: TOP + 12,
                 });
-                for (x, y) in [(4, 16), (3, 14), (3, 13), (2, 16), (2, 18), (3, 19)] {
-                    game.board[y * WIDTH + x] = 8;
+                // 보이는 판의 아래쪽 8줄 안에 만든 퍼즐
+                for (x, y) in [(4, 14), (3, 12), (3, 11), (2, 14), (2, 16), (3, 17)] {
+                    game.board[(TOP as usize + y) * WIDTH + x] = 8;
                 }
             }
             Mode::Combo => {
@@ -88,7 +94,7 @@ impl Session {
                     kind: Kind::O,
                     rot: 0,
                     x: 4,
-                    y: 1,
+                    y: SPAWN_Y,
                 });
                 game.next.push_front(Kind::O);
             }
@@ -102,7 +108,7 @@ impl Session {
                     kind: Kind::I,
                     rot: 0,
                     x: 3,
-                    y: 1,
+                    y: SPAWN_Y,
                 });
                 game.receive_garbage(4);
             }
@@ -252,6 +258,15 @@ mod tests {
         s.input(Input::HardDrop);
         assert_eq!(s.outcome, Outcome::Success);
         assert!(s.record_value().is_some());
+    }
+    #[test]
+    fn exercise_pieces_start_where_the_player_can_see_them() {
+        for mode in [Mode::TSpin, Mode::Combo, Mode::Cancel] {
+            let s = Session::new(mode, 1);
+            let a = s.game.active.unwrap();
+            assert!(a.cells().any(|(_, y)| y as usize >= HIDDEN), "{mode:?} piece is hidden at {a:?}");
+            assert!(s.game.board[..HIDDEN * WIDTH].iter().all(|&c| c == 0), "{mode:?} puzzle cells are hidden");
+        }
     }
     #[test]
     fn failed_spin_can_be_retried_from_same_board() {
