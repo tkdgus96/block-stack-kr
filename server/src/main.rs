@@ -2,6 +2,9 @@
 
 mod room;
 mod profile;
+mod replays;
+mod matchmaking;
+mod leaderboard;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -24,12 +27,24 @@ async fn main() {
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);
     let dist = std::env::var("BS_DIST").unwrap_or_else(|_| "client/dist".into());
     let registry: Registry = Default::default();
+    {
+        let reg = registry.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                every.tick().await;
+                matchmaking::sweep(&reg, std::time::Instant::now());
+            }
+        });
+    }
 
     let static_files = ServeDir::new(&dist).fallback(ServeFile::new(format!("{dist}/index.html")));
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }))
         .merge(profile::router())
+        .merge(replays::router())
+        .merge(leaderboard::router())
         .fallback_service(static_files)
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
@@ -118,7 +133,25 @@ fn send_room_list(reg: &Registry, out: &Outbox) {
     }
 }
 
+static NEXT_CONN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 방을 거치지 않는 메시지(방 목록, 빠른 대전)를 처리했으면 true
+async fn handle_lobby_msg(reg: &Registry, conn: u64, out: &Outbox, msg: &ClientMsg) -> bool {
+    match msg {
+        ClientMsg::ListRooms => send_room_list(reg, out),
+        ClientMsg::QuickMatch { token } => {
+            let token = token.clone();
+            let rating = tokio::task::spawn_blocking(move || profile::rating_of(&token)).await.unwrap_or(1500.0);
+            matchmaking::enqueue(reg, conn, rating, out.clone());
+        }
+        ClientMsg::CancelQuickMatch => matchmaking::cancel(conn),
+        _ => return false,
+    }
+    true
+}
+
 async fn handle_socket(socket: WebSocket, reg: Registry) {
+    let conn = NEXT_CONN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx): (Outbox, _) = mpsc::channel(256);
 
@@ -134,17 +167,18 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
     // 첫 메시지는 Join 이어야 한다
     let (room_tx, id) = loop {
         let Some(Ok(msg)) = stream.next().await else {
+            matchmaking::forget(conn);
             writer.abort();
             return;
         };
         let Message::Binary(b) = msg else { continue };
         let (room, name) = match decode::<ClientMsg>(&b) {
             Some(ClientMsg::Join { room, name }) => (room, name),
-            Some(ClientMsg::ListRooms) => {
-                send_room_list(&reg, &out_tx);
+            Some(other) => {
+                handle_lobby_msg(&reg, conn, &out_tx, &other).await;
                 continue;
             }
-            _ => continue,
+            None => continue,
         };
         let mut name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME_LEN).collect();
         if name.is_empty() {
@@ -183,9 +217,8 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
         match msg {
             Message::Binary(b) => {
                 if let Some(m) = decode::<ClientMsg>(&b) {
-                    // 방 목록은 방 태스크를 거치지 않고 레지스트리에서 바로 응답
-                    if m == ClientMsg::ListRooms {
-                        send_room_list(&reg, &out_tx);
+                    // 방 목록과 빠른 대전은 방 태스크를 거치지 않는다
+                    if handle_lobby_msg(&reg, conn, &out_tx, &m).await {
                         continue;
                     }
                     if room_tx.send(RoomCmd::Msg { id, msg: m }).await.is_err() {
@@ -197,6 +230,7 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
             _ => {}
         }
     }
+    matchmaking::forget(conn);
     let _ = room_tx.send(RoomCmd::Leave { id }).await;
     writer.abort();
 }

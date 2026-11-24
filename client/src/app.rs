@@ -23,7 +23,8 @@ pub(crate) enum Tab {
 #[component]
 pub fn App() -> impl IntoView {
     let ui = Ui::new();
-    let tab = RwSignal::new(Tab::Game);
+    // 공유받은 리플레이 링크로 들어오면 기록 화면을 먼저 연다.
+    let tab = RwSignal::new(if ui.full_replay_id.get_untracked().is_some() { Tab::Records } else { Tab::Game });
 
     // 테마/저사양/애니메이션/셀 크기 → body class 와 CSS 변수 (설정 변경 시에만 실행)
     Effect::new(move |_| {
@@ -96,7 +97,7 @@ fn SheetShell(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                     <div class:hidden=move || tab.get() != Tab::Rooms>
                         <RoomsSheet ui=ui tab=tab/>
                     </div>
-                    <div class:hidden=move || tab.get() != Tab::Records><crate::records::PersonalRecords ui=ui/><crate::profile::ProfilePanel/><crate::replay::ReplayPanel ui=ui/></div>
+                    <div class:hidden=move || tab.get() != Tab::Records><crate::records::PersonalRecords ui=ui/><crate::profile::ProfilePanel/><crate::fullreplay::FullReplayPanel ui=ui/><crate::replay::ReplayPanel ui=ui/></div>
                     <Show when=move || tab.get() == Tab::Practice && ui.phase.get() != Phase::Lobby><p>"경기 중입니다. 대전 화면에서 현재 경기를 마친 뒤 연습실을 이용하세요."</p></Show>
                     <Show when=move || tab.get() == Tab::Practice && ui.phase.get() == Phase::Lobby><crate::practice::PracticeLab/></Show>
                     <div class:hidden=move || tab.get() != Tab::Log>
@@ -675,6 +676,7 @@ pub(crate) fn RoomsSheet(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                     core::join_room("");
                     tab.set(Tab::Game);
                 }>"새 방 만들기"</button>
+                <span on:click=move |_| tab.set(Tab::Game)><crate::battle::QuickMatchButton ui=ui/></span>
                 <form class="join" on:submit=join>
                     <input class="code-input" aria-label="참가할 방 코드" placeholder="방 코드" maxlength="8"
                         prop:value=move || code.get()

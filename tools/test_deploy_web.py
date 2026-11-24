@@ -88,7 +88,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn(f"'sha256-{digest}'", headers)
         self.assertEqual(headers.count("'sha256-"), 1)
         self.assertIn("connect-src 'self' wss://game.example.org/ws", headers)
-        self.assertIn("https://game.example.org/api/profile", headers)
+        self.assertIn("https://game.example.org/api/;", headers)  # /api/ 아래 프로필·리플레이·순위표
         self.assertNotIn("script-src 'self' 'unsafe-inline'", headers)
 
     def test_release_manifest_and_live_verification(self):

@@ -150,7 +150,7 @@ Pages는 Cloudflare 대시보드의 해당 프로젝트 배포 목록에서 이�
 
 `AttachProfile`과 `SetCoop`은 ClientMsg 12/13, `CoopState`와 `CoopRooms`는 ServerMsg 22/23에 추가했다. 기존 payload·번호는 유지한다. 방 목록은 협동 모드도 별도 표기한다.
 
-프로필 API는 `https://golfjoinn.duckdns.org/block-stack/api/profile`이며 Pages의 CSP connect-src와 API의 CORS 허용 원본을 함께 구성했다. 인증 없는 요청은 401이다. 서버 데이터는 systemd `StateDirectory=block-stack`, `BS_DATA_DIR=/var/lib/block-stack`으로 릴리스와 분리했다. 디렉터리 권한은 0700, 프로필 파일은 0600이다. 서비스 파일의 이전 사본은 `/etc/systemd/system/block-stack.service.before-growth`다. 릴리스 rollback은 서버 데이터 폴더를 삭제하지 않는다.
+프로필 API는 `https://golfjoinn.duckdns.org/block-stack/api/profile`이며 Pages의 CSP connect-src와 API의 CORS 허용 원본을 함께 구성했다. 인증 없는 요청은 401이다. 서버 데이터는 systemd `StateDirectory=block-stack`, `BS_DATA_DIR=/var/lib/block-stack`으로 릴리스와 분리했다. 디렉터리 권한은 0700, 프로필 파일은 0600이다. 서비스 파일의 이전 사본은 `/etc/systemd/system/block-stack.service.before-growth`다. 릴리스 rollback은 서버 데이터 폴더를 삭제하지 않는다. 같은 폴더 아래 `replays/`(전체 경기 리플레이, 최근 500개)와 `leaderboard/`(연습 순위표)도 생기므로 함께 백업한다. Pages CSP의 connect-src는 프로필·리플레이·순위표를 모두 쓰도록 `/api/` 경로 전체를 허용한다.
 
 핵심 Rust 테스트 82개, 웹 배포 도구 테스트 8개와 릴리스 안전 검증을 통과했다. 신규 연습·제스처·대기실·사운드·프로필·리플레이/협동 검사와 기존 대전·콤보·재대결 회귀 검사를 로컬에서 수행했다. 운영 Oracle fallback에서는 연습·제스처·실제 대전 후 프로필 갱신·복구·저장 차단 시 코드 유지 검사를 통과했다.
 

@@ -62,6 +62,101 @@ pub struct Profile {
     recent_matches: Vec<String>,
     #[serde(default)]
     daily_claimed: u8,
+    /// Glicko-2 레이팅. 로그인 없는 프로필이라 참고용으로만 보여 주고 매칭에 쓴다.
+    #[serde(default = "default_rating")]
+    pub rating: f64,
+    #[serde(default = "default_rd")]
+    pub rd: f64,
+    #[serde(default = "default_vol")]
+    pub vol: f64,
+    #[serde(default)]
+    pub rated_games: u32,
+    #[serde(default)]
+    rated_matches: Vec<String>,
+}
+fn default_rating() -> f64 { 1500.0 }
+fn default_rd() -> f64 { 350.0 }
+fn default_vol() -> f64 { 0.06 }
+
+/// Glicko-2 계산 (Glickman, "Example of the Glicko-2 system"). 한 경기를 한 기간으로 본다.
+pub mod glicko {
+    const SCALE: f64 = 173.7178;
+    const TAU: f64 = 0.5;
+    /// 너무 확신하지 않도록 RD 하한을 둔다.
+    const MIN_RD: f64 = 45.0;
+
+    fn g(phi: f64) -> f64 {
+        1.0 / (1.0 + 3.0 * phi * phi / (std::f64::consts::PI * std::f64::consts::PI)).sqrt()
+    }
+
+    /// (rating, rd, vol) 이 상대 (rating, rd) 와 경기해 score(1 승, 0.5 무, 0 패)를 얻은 뒤 값
+    pub fn update(me: (f64, f64, f64), opp: (f64, f64), score: f64) -> (f64, f64, f64) {
+        let (mu, phi, sigma) = ((me.0 - 1500.0) / SCALE, me.1 / SCALE, me.2);
+        let (mu_j, phi_j) = ((opp.0 - 1500.0) / SCALE, opp.1 / SCALE);
+        let gj = g(phi_j);
+        let e = 1.0 / (1.0 + (-gj * (mu - mu_j)).exp());
+        let v = 1.0 / (gj * gj * e * (1.0 - e));
+        let delta = v * gj * (score - e);
+        // 변동성: Illinois 방법
+        let a = (sigma * sigma).ln();
+        let f = |x: f64| {
+            let ex = x.exp();
+            ex * (delta * delta - phi * phi - v - ex) / (2.0 * (phi * phi + v + ex).powi(2)) - (x - a) / (TAU * TAU)
+        };
+        let mut big_a = a;
+        let mut big_b = if delta * delta > phi * phi + v {
+            (delta * delta - phi * phi - v).ln()
+        } else {
+            let mut k = 1.0;
+            while f(a - k * TAU) < 0.0 { k += 1.0; }
+            a - k * TAU
+        };
+        let (mut fa, mut fb) = (f(big_a), f(big_b));
+        for _ in 0..100 {
+            if (big_b - big_a).abs() <= 1e-6 { break; }
+            let c = big_a + (big_a - big_b) * fa / (fb - fa);
+            let fc = f(c);
+            if fc * fb <= 0.0 { big_a = big_b; fa = fb; } else { fa /= 2.0; }
+            big_b = c;
+            fb = fc;
+        }
+        let sigma2 = (big_a / 2.0).exp();
+        let phi_star = (phi * phi + sigma2 * sigma2).sqrt();
+        let phi2 = 1.0 / (1.0 / (phi_star * phi_star) + 1.0 / v).sqrt();
+        let mu2 = mu + phi2 * phi2 * gj * (score - e);
+        (mu2 * SCALE + 1500.0, (phi2 * SCALE).max(MIN_RD), sigma2)
+    }
+}
+
+/// 사람 두 명이 각자 다른 프로필로 1:1 경기를 끝냈을 때 두 레이팅을 함께 바꾼다.
+/// score 는 a 기준(1 승, 0.5 무, 0 패)이다. 같은 경기는 한 번만 반영한다.
+pub fn record_rating(a: &str, b: &str, score: f64, match_id: &str) -> Result<(), String> {
+    if !valid_token(a) || !valid_token(b) || a == b || match_id.len() > 120 {
+        return Err("invalid rating request".into());
+    }
+    let _guard = LOCK.lock().map_err(|_| "profile lock poisoned")?;
+    let (fa, fb) = (path(a), path(b));
+    let (mut pa, mut pb) = (read_at(&fa)?, read_at(&fb)?);
+    if pa.rated_matches.iter().any(|m| m == match_id) || pb.rated_matches.iter().any(|m| m == match_id) {
+        return Ok(());
+    }
+    let na = glicko::update((pa.rating, pa.rd, pa.vol), (pb.rating, pb.rd), score);
+    let nb = glicko::update((pb.rating, pb.rd, pb.vol), (pa.rating, pa.rd), 1.0 - score);
+    for (p, n) in [(&mut pa, na), (&mut pb, nb)] {
+        (p.rating, p.rd, p.vol) = n;
+        p.rated_games = p.rated_games.saturating_add(1);
+        p.rated_matches.push(match_id.into());
+        if p.rated_matches.len() > 64 { p.rated_matches.remove(0); }
+    }
+    write_at(&fa, &pa)?;
+    write_at(&fb, &pb)
+}
+
+/// 빠른 대전 매칭용: 프로필이 없으면 기본값
+pub fn rating_of(token: &str) -> f64 {
+    if !valid_token(token) { return default_rating(); }
+    let _guard = LOCK.lock();
+    read_at(&path(token)).map(|p| p.rating).unwrap_or_else(|_| default_rating())
 }
 impl Profile {
     fn refresh(&mut self, today: u64) {
@@ -226,6 +321,9 @@ async fn handle(headers: HeaderMap, create: bool) -> Response {
                     &file,
                     &Profile {
                         day: day(),
+                        rating: default_rating(),
+                        rd: default_rd(),
+                        vol: default_vol(),
                         ..Default::default()
                     },
                 )
@@ -333,6 +431,20 @@ mod tests {
         );
         assert_eq!(allowed.headers()[header::CACHE_CONTROL], "no-store");
     }
+    #[test]
+    fn glicko_matches_reference_example_and_is_symmetric() {
+        // Glickman 문서 예제의 첫 경기: 1500/200 대 1400/30 에서 승리하면 레이팅이 오른다.
+        let (r, rd, _) = glicko::update((1500.0, 200.0, 0.06), (1400.0, 30.0), 1.0);
+        assert!(r > 1560.0 && r < 1580.0, "{r}");
+        assert!(rd < 200.0);
+        // 같은 조건의 두 신규 플레이어는 같은 만큼 오르고 내린다.
+        let (w, _, _) = glicko::update((1500.0, 350.0, 0.06), (1500.0, 350.0), 1.0);
+        let (l, _, _) = glicko::update((1500.0, 350.0, 0.06), (1500.0, 350.0), 0.0);
+        assert!((w - 1500.0 - (1500.0 - l)).abs() < 1e-6);
+        let (d, _, _) = glicko::update((1500.0, 350.0, 0.06), (1500.0, 350.0), 0.5);
+        assert!((d - 1500.0).abs() < 1e-6);
+    }
+
     #[test]
     fn missions_reset_dedupe_and_unlock() {
         let mut p = Profile::default();

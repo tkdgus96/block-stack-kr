@@ -132,3 +132,22 @@ pub(crate) fn TargetModeSelect(ui: Ui) -> impl IntoView {
         </Show>
     }
 }
+
+/// 1:1 빠른 대전. 비슷한 레이팅의 상대를 찾고, 15초 안에 없으면 봇과 붙는다.
+#[component]
+pub(crate) fn QuickMatchButton(ui: Ui) -> impl IntoView {
+    let lobby = move || ui.phase.get() == Phase::Lobby;
+    view! {
+        <button class="arc-btn quick-match" class:waiting=move || ui.quick_waiting.get() disabled=move || !lobby()
+            title="비슷한 실력의 상대와 1:1 대전을 바로 시작합니다. 15초 안에 상대가 없으면 봇과 대전합니다."
+            on:click=move |_| {
+                if ui.quick_waiting.get_untracked() {
+                    crate::runtime::send(ClientMsg::CancelQuickMatch);
+                } else {
+                    crate::runtime::send(ClientMsg::QuickMatch { token: crate::profile::token().unwrap_or_default() });
+                }
+            }>
+            {move || if ui.quick_waiting.get() { "상대 찾는 중… (취소)" } else { "빠른 대전 1:1" }}
+        </button>
+    }
+}

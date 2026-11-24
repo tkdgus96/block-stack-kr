@@ -32,6 +32,49 @@ pub enum ClientMsg {
     SetCoop { enabled: bool },
     /// 내 공격을 누구에게 보낼지. 새 값은 항상 맨 뒤에 붙인다.
     SetTargetMode { mode: TargetMode },
+    /// 빠른 대전 대기열에 들어간다. token 은 프로필 복구 코드(없으면 빈 문자열)로 레이팅을 찾는 데만 쓴다.
+    QuickMatch { token: String },
+    CancelQuickMatch,
+}
+
+/// 서버 순위표가 있는 연습 모드
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RankedMode {
+    Sprint,
+    Blitz,
+    Marathon,
+}
+
+impl RankedMode {
+    pub const ALL: [RankedMode; 3] = [RankedMode::Sprint, RankedMode::Blitz, RankedMode::Marathon];
+    pub fn practice(self) -> crate::practice::Mode {
+        match self {
+            RankedMode::Sprint => crate::practice::Mode::Sprint,
+            RankedMode::Blitz => crate::practice::Mode::Blitz,
+            RankedMode::Marathon => crate::practice::Mode::Marathon,
+        }
+    }
+    pub fn from_practice(mode: crate::practice::Mode) -> Option<RankedMode> {
+        RankedMode::ALL.into_iter().find(|m| m.practice() == mode)
+    }
+    /// URL 에 쓰는 이름
+    pub fn slug(self) -> &'static str {
+        match self {
+            RankedMode::Sprint => "sprint",
+            RankedMode::Blitz => "blitz",
+            RankedMode::Marathon => "marathon",
+        }
+    }
+}
+
+/// 순위표 등록 요청 (`POST /api/leaderboard`, postcard). 서버가 입력 기록으로 다시 실행해 기록을 확인한다.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LeaderboardSubmission {
+    pub mode: RankedMode,
+    pub seed: u64,
+    pub end_tick: u32,
+    pub name: String,
+    pub log: Vec<(u32, Input, bool)>,
 }
 
 /// 공격 대상 선택 방식
@@ -221,6 +264,12 @@ pub enum ServerMsg {
     CombatStatus(Vec<CombatStatus>),
     CoopState(CoopState),
     CoopRooms(Vec<String>),
+    /// 끝난 경기의 전체 리플레이를 `/api/replay/{id}` 에서 받을 수 있다.
+    ReplayReady { id: String },
+    /// 빠른 대전 대기 상태. false 면 대기열에서 빠졌다.
+    QuickMatchWaiting(bool),
+    /// 상대를 찾았다. 이 방 코드로 들어가면 바로 시작한다. vs_bot 이면 사람 대신 봇과 붙는다.
+    MatchFound { room: String, vs_bot: bool },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

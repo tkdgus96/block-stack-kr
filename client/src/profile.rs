@@ -16,6 +16,12 @@ struct Profile {
     daily_wins: u32,
     completed_missions: u64,
     themes: Vec<String>,
+    #[serde(default)]
+    rating: f64,
+    #[serde(default)]
+    rd: f64,
+    #[serde(default)]
+    rated_games: u32,
 }
 pub fn token() -> Option<String> {
     SESSION_TOKEN.with(|s| s.borrow().clone()).or_else(|| {
@@ -51,15 +57,7 @@ fn generate() -> Option<String> {
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 fn endpoint() -> String {
-    if let Some(ws) = option_env!("BS_WS_URL").filter(|s| !s.is_empty()) {
-        let url = ws
-            .replacen("wss://", "https://", 1)
-            .replacen("ws://", "http://", 1);
-        if let Some(base) = url.strip_suffix("/ws") {
-            return format!("{base}/api/profile");
-        }
-    }
-    "/api/profile".into()
+    crate::api::url("/api/profile")
 }
 async fn request(t: &str, create: bool) -> Result<Profile, String> {
     let options = web_sys::RequestInit::new();
@@ -202,6 +200,9 @@ pub fn ProfilePanel() -> impl IntoView {
             <button on:click=move |_|load(None) disabled=move||busy.get()>"전적 새로고침"</button>
             {move||profile.get().map(|p|view!{
                 <div class="profile-totals"><strong>{format!("{}경기 · {}승 · 공격 {}줄",p.rounds,p.wins,p.sent)}</strong></div>
+                <p class="profile-rating" title="1:1 개인전 결과로 계산하는 Glicko-2 점수입니다. 로그인 없는 프로필이라 참고용이며, 빠른 대전에서 비슷한 상대를 찾는 데 씁니다.">
+                    {if p.rated_games == 0 { "레이팅: 1:1 대전을 하면 표시됩니다 (참고용)".to_string() } else { format!("레이팅 {:.0} ± {:.0} · {}경기 반영 (참고용)", p.rating, p.rd * 2.0, p.rated_games) }}
+                </p>
                 <p>"공개/비공개 대전만 집계합니다. 혼자 연습과 협동전은 제외됩니다. 미션은 매일 UTC 00시(한국 오전 9시)에 초기화됩니다."</p>
                 <ul class="mission-list">
                     <li class:done={p.daily_rounds>=3}>{format!("{} 대전 3경기 완료 {}/3",if p.daily_rounds>=3 {"✓"}else{"○"},p.daily_rounds.min(3))}</li>

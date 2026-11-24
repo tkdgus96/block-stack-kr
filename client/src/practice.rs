@@ -1,6 +1,7 @@
 //! Self-contained offline lab: never sends room inputs or writes multiplayer records.
 use bs_engine::{
     practice::{Mode, Outcome, Session, MARATHON_LINES},
+    protocol::{encode, LeaderboardSubmission, RankedMode},
     puzzles::PUZZLES,
     Input, VISIBLE_CELLS, WIDTH,
 };
@@ -44,6 +45,48 @@ fn save_best(s: &Session) -> bool {
                 .is_ok()
         })
 }
+#[derive(Clone, serde::Deserialize)]
+struct Rank {
+    name: String,
+    value: u32,
+}
+
+/// 끝난 기록을 서버 순위표에 보낸다. 서버가 입력 기록으로 다시 실행해 확인한다.
+fn submit_rank(s: &Session, status: RwSignal<String>, ranks: RwSignal<Vec<Rank>>) {
+    let Some(mode) = RankedMode::from_practice(s.mode) else { return };
+    if s.record_value().is_none() {
+        return;
+    }
+    let Some(token) = crate::profile::token() else {
+        status.set("서버 프로필(개인 기록 탭)을 만들면 순위표에 등록됩니다.".into());
+        return;
+    };
+    let name = crate::settings::Settings::load().name;
+    let body = encode(&LeaderboardSubmission { mode, seed: s.seed, end_tick: s.ticks, name, log: s.log.clone() });
+    status.set("순위표에 보내는 중…".into());
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::post_bytes("/api/leaderboard", &token, &body).await;
+        if status.is_disposed() { return; }
+        status.set(match result {
+            Ok(_) => "서버가 기록을 확인하고 순위표에 반영했습니다.".into(),
+            Err(422) => "서버에서 다시 실행한 결과가 달라 등록하지 않았습니다.".into(),
+            Err(401) => "서버 프로필을 찾을 수 없어 등록하지 않았습니다.".into(),
+            Err(_) => "순위표 서버에 연결하지 못했습니다.".into(),
+        });
+        load_ranks(mode, ranks);
+    });
+}
+
+fn load_ranks(mode: RankedMode, ranks: RwSignal<Vec<Rank>>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let list = crate::api::get_text(&format!("/api/leaderboard/{}", mode.slug())).await
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<Rank>>(&t).ok())
+            .unwrap_or_default();
+        if !ranks.is_disposed() { ranks.set(list); }
+    });
+}
+
 fn time(ticks: u32) -> String {
     format!(
         "{}:{:02}.{:02}",
@@ -88,6 +131,16 @@ pub(crate) fn PracticeLab() -> impl IntoView {
     let held = RwSignal::new(Vec::<(i32, Input)>::new());
     let repeat_at = RwSignal::new(0.0);
     let canvas = NodeRef::<html::Canvas>::new();
+    let rank_status = RwSignal::new(String::new());
+    let ranks = RwSignal::new(Vec::<Rank>::new());
+    Effect::new(move |_| {
+        let mode = session.with(|s| s.mode);
+        rank_status.set(String::new());
+        match RankedMode::from_practice(mode) {
+            Some(m) => load_ranks(m, ranks),
+            None => ranks.set(Vec::new()),
+        }
+    });
     let root = NodeRef::<html::Section>::new();
     Effect::new(move |_| {
         let s = session.get();
@@ -128,6 +181,7 @@ pub(crate) fn PracticeLab() -> impl IntoView {
             running.set(false);
             held.set(Vec::new());
             saved.set(save_best(&s));
+            submit_rank(&s, rank_status, ranks);
         }
     };
     let callback = Closure::<dyn FnMut()>::new(update);
@@ -158,6 +212,7 @@ pub(crate) fn PracticeLab() -> impl IntoView {
             running.set(false);
             held.set(Vec::new());
             saved.set(save_best(&s));
+            submit_rank(&s, rank_status, ranks);
         }
     };
     let restart = move || {
@@ -228,6 +283,17 @@ pub(crate) fn PracticeLab() -> impl IntoView {
                     <button type="button" class="primary practice-start" on:click=move |_|restart()>{move ||if running.get(){"처음부터 다시"}else{"시작 / 다시 도전"}}</button>
                     <p class="feature-note">"← → 이동 · ↓ 내리기 · ↑/X 오른쪽 회전 · Z 왼쪽 회전 · A 180도 회전 · Space 고정 · C 보관"</p>
                     <p class="feature-note">"연습 과제는 자동 낙하 없이 천천히 조작할 수 있습니다. 최고 기록은 이 브라우저에 저장됩니다."</p>
+                    <Show when=move ||session.with(|s|RankedMode::from_practice(s.mode).is_some())>
+                        <div class="practice-ranks">
+                            <h4>"서버 순위표"</h4>
+                            <p class="feature-note" role="status">{move ||rank_status.get()}</p>
+                            <ol>{move ||{
+                                let higher = session.with(|s|s.mode.higher_is_better());
+                                ranks.get().into_iter().map(|r|view!{<li><span>{r.name}</span><b>{if higher {format!("{}점",r.value)} else {time(r.value)}}</b></li>}).collect_view()
+                            }}</ol>
+                            <Show when=move ||ranks.with(|r|r.is_empty())><p class="feature-note">"아직 등록된 기록이 없습니다."</p></Show>
+                        </div>
+                    </Show>
                     <Show when=move ||!saved.get()><p role="status">"저장소를 사용할 수 없어 이번 기록은 저장되지 않았습니다."</p></Show>
                 </div>
             </div>

@@ -137,6 +137,7 @@ pub fn ArcadeShell(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                                 </div>
                                 <button class="arc-btn start" disabled=move || !crate::room_controls::can_start(ui)
                                     on:click=move |_| core::send(ClientMsg::Start)>{move || if !lobby() { "대전 진행 중" } else if is_host() { "준비하고 시작  →" } else { "방장 시작 대기" }}</button>
+                                <crate::battle::QuickMatchButton ui=ui/>
                             </div>
                             <crate::room_controls::RoomControls ui=ui/><crate::coop::CoopPanel ui=ui/>
                             <div class="arc-chat"><ChatPanel ui=ui/></div>
@@ -147,7 +148,7 @@ pub fn ArcadeShell(ui: Ui, tab: RwSignal<Tab>) -> impl IntoView {
                 <div class="arc-page" class:hidden=move || tab.get() != Tab::Settings><SettingsSheet ui=ui/></div>
                 <div class="arc-page" class:hidden=move || tab.get() != Tab::Help><HelpSheet ui=ui/></div>
                 <div class="arc-page" class:hidden=move || tab.get() != Tab::Rooms><RoomsSheet ui=ui tab=tab/></div>
-                <div class="arc-page" class:hidden=move || tab.get() != Tab::Records><crate::records::PersonalRecords ui=ui/><crate::profile::ProfilePanel/><crate::replay::ReplayPanel ui=ui/></div>
+                <div class="arc-page" class:hidden=move || tab.get() != Tab::Records><crate::records::PersonalRecords ui=ui/><crate::profile::ProfilePanel/><crate::fullreplay::FullReplayPanel ui=ui/><crate::replay::ReplayPanel ui=ui/></div>
                 <Show when=move || tab.get() == Tab::Practice && ui.phase.get() != Phase::Lobby><div class="arc-page"><p>"경기 중입니다. 대전 화면에서 현재 경기를 마친 뒤 연습실을 이용하세요."</p></div></Show>
                 <Show when=move || tab.get() == Tab::Practice && ui.phase.get() == Phase::Lobby><div class="arc-page"><crate::practice::PracticeLab/></div></Show>
                 <div class="arc-page" class:hidden=move || tab.get() != Tab::Log><LogSheet ui=ui/></div>

@@ -86,6 +86,10 @@ pub struct Ui {
     /// 내가 받을 공격 중 도착 시각이 지나 다음 고정 때 올라올 줄 수
     pub incoming_ready: RwSignal<u32>,
     pub target_mode: RwSignal<TargetMode>,
+    /// 서버에 저장된 전체 리플레이 id (최근 경기 또는 공유 링크)
+    pub full_replay_id: RwSignal<Option<String>>,
+    /// 빠른 대전 대기 중
+    pub quick_waiting: RwSignal<bool>,
 }
 
 impl Ui {
@@ -125,6 +129,8 @@ impl Ui {
             coop_rooms: RwSignal::new(Vec::new()),
             incoming_ready: RwSignal::new(0),
             target_mode: RwSignal::new(TargetMode::Random),
+            full_replay_id: RwSignal::new(crate::api::query("replay").filter(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))),
+            quick_waiting: RwSignal::new(false),
         }
     }
 }
@@ -764,6 +770,14 @@ impl Core {
                 self.authoritative_state(ack, game);
             }
             ServerMsg::CombatStatus(states) => self.ui.combat_states.set(states),
+            ServerMsg::ReplayReady { id } => self.ui.full_replay_id.set(Some(id)),
+            ServerMsg::QuickMatchWaiting(waiting) => self.ui.quick_waiting.set(waiting),
+            ServerMsg::MatchFound { room, vs_bot } => {
+                self.ui.quick_waiting.set(false);
+                self.ui.status.set(if vs_bot { "상대가 없어 봇과 대전합니다".into() } else { "상대를 찾았습니다".into() });
+                self.want_room = room;
+                self.reconnect_now();
+            }
             ServerMsg::CombatEvent(event) => {
                 if event.match_id <= self.combat_floor { return; }
                 if self.combat_seen.get(&event.player).is_some_and(|&(id, piece)| event.match_id < id || (event.match_id == id && event.piece <= piece)) { return; }

@@ -97,7 +97,7 @@ def write_headers(dist, endpoint):
     hashes = ["'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'" for s in parser.scripts]
     csp = "; ".join([
         "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval' " + " ".join(hashes),
-        "style-src 'self' 'unsafe-inline'", f"connect-src 'self' {endpoint} {endpoint.replace('wss://', 'https://', 1).removesuffix('/ws')}/api/profile",
+        "style-src 'self' 'unsafe-inline'", f"connect-src 'self' {endpoint} {endpoint.replace('wss://', 'https://', 1).removesuffix('/ws')}/api/",
         "img-src 'self' data:", "object-src 'none'", "base-uri 'self'",
         "frame-ancestors 'none'", "form-action 'self'",
     ])

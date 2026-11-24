@@ -92,6 +92,7 @@ python3 tools/smoke_combat.py --url http://localhost:3000  # 전투 패킷 UI fi
 python3 tools/smoke_handling.py --url http://localhost:3000  # 180도 회전·즉시 내리기·ARR 0 유지·경쟁용 프리셋
 python3 tools/smoke_battle_rules.py --url http://localhost:3000  # 3인 방 공격 대상 선택·곧 올라올 공격 표시
 python3 tools/smoke_practice_modes.py --url http://localhost:3000  # 마라톤·Zen·퍼즐·키 입력 실수 표시
+python3 tools/smoke_competitive.py --url http://localhost:3000  # 빠른 대전·봇 대체·전체 리플레이 공유·서버 순위표 (약 20초)
 python tools/measure.py   # 실제 Edge/Chrome 으로 성능 측정 (서버 실행 필요, pip install playwright psutil)
 ```
 
@@ -168,4 +169,4 @@ Tetris Battle, 한게임 테트리스, 넷마블 테트리스의 대전판·상�
 
 ## 연습과 성장
 
-연습실(T스핀·콤보·상쇄·40줄·2분 도전·마라톤·Zen·퍼즐 10개, 키 입력 효율 표시), 최근 경기 리플레이와 APM 추이, 서버 프로필·일일 미션·해금 테마, 선택형 모바일 제스처, 협동 생존전을 제공합니다. 대기실에서는 내 P번호·방장·준비 상태를 구분합니다. [기능과 저장 범위](docs/GROWTH_FEATURES.md)를 참고하세요.
+연습실(T스핀·콤보·상쇄·40줄·2분 도전·마라톤·Zen·퍼즐 10개, 키 입력 효율 표시), 빠른 대전 1:1(참고용 레이팅), 전체 경기 리플레이와 공유 링크, 서버 순위표, 최근 경기 리플레이와 APM 추이, 서버 프로필·일일 미션·해금 테마, 선택형 모바일 제스처, 협동 생존전을 제공합니다. 대기실에서는 내 P번호·방장·준비 상태를 구분합니다. [기능과 저장 범위](docs/GROWTH_FEATURES.md)를 참고하세요.

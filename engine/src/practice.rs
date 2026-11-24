@@ -114,7 +114,15 @@ pub struct Session {
     piece_skip: bool,
     /// 지금 블록이 생성된 순간의 게임
     spawn: Option<Game>,
+    pub seed: u64,
+    /// (입력 시점 tick, 입력, 새로 누른 키인지). 순위표 등록 때 서버가 이 기록으로 다시 실행한다.
+    pub log: Vec<(u32, Input, bool)>,
 }
+
+/// 순위표에 올릴 수 있는 기록 길이 상한 (마라톤 150줄도 충분히 들어간다)
+pub const MAX_LOG: usize = 60_000;
+/// 다시 실행할 최대 tick (2시간)
+pub const MAX_VERIFY_TICKS: u32 = 2 * 60 * 60 * 60;
 impl Session {
     pub fn new(mode: Mode, seed: u64) -> Self {
         let mut game = Game::new(seed);
@@ -180,7 +188,25 @@ impl Session {
             faults: 0,
             piece_presses: 0,
             piece_skip: false,
+            seed,
+            log: Vec::new(),
         }
+    }
+    /// 저장된 입력 기록으로 처음부터 다시 실행한다. 기록이 맞지 않으면 `None`.
+    pub fn verify(mode: Mode, seed: u64, log: &[(u32, Input, bool)], end_tick: u32) -> Option<Session> {
+        if log.len() > MAX_LOG || end_tick > MAX_VERIFY_TICKS || log.windows(2).any(|w| w[0].0 > w[1].0) {
+            return None;
+        }
+        if log.last().is_some_and(|l| l.0 > end_tick) {
+            return None;
+        }
+        let mut s = Session::new(mode, seed);
+        for &(tick, input, pressed) in log {
+            s.advance_to(tick);
+            if pressed { s.press(input) } else { s.input(input) }
+        }
+        s.advance_to(end_tick);
+        Some(s)
     }
     /// 블록당 키 입력 수
     pub fn kpp(&self) -> f64 {
@@ -196,7 +222,13 @@ impl Session {
         if matches!(input, Input::Hold | Input::SoftDrop) {
             self.piece_skip = true;
         }
-        self.input(input);
+        self.log_input(input, true);
+        self.apply(input);
+    }
+    fn log_input(&mut self, input: Input, pressed: bool) {
+        if self.log.len() < MAX_LOG {
+            self.log.push((self.ticks, input, pressed));
+        }
     }
     fn accept(&mut self, event: Events) {
         if event.locked {
@@ -239,6 +271,10 @@ impl Session {
         if self.outcome != Outcome::Playing {
             return;
         }
+        self.log_input(input, false);
+        self.apply(input);
+    }
+    fn apply(&mut self, input: Input) {
         let landing: Option<Vec<(i8, i8)>> = (input == Input::HardDrop)
             .then(|| self.game.ghost().map(|g| g.cells().collect()))
             .flatten();
@@ -433,6 +469,25 @@ mod tests {
         assert_eq!(s.judged, 2);
         assert_eq!(s.presses, 10);
         assert!((s.kpp() - 10.0 / 3.0).abs() < 1e-9);
+    }
+    #[test]
+    fn verify_reproduces_a_logged_run_and_rejects_bad_logs() {
+        let mut s = Session::new(Mode::Sprint, 42);
+        let inputs = [Input::Left, Input::HardDrop, Input::RotateCw, Input::Right, Input::Right, Input::HardDrop, Input::Hold, Input::HardDrop];
+        for (i, &input) in inputs.iter().cycle().take(200).enumerate() {
+            s.advance_to(i as u32 * 9);
+            if i % 3 == 0 { s.input(input) } else { s.press(input) }
+        }
+        s.advance_to(2000);
+        let again = Session::verify(Mode::Sprint, 42, &s.log, 2000).unwrap();
+        assert_eq!(again.game, s.game);
+        assert_eq!((again.outcome, again.ticks, again.presses, again.faults), (s.outcome, s.ticks, s.presses, s.faults));
+        let mut shuffled = s.log.clone();
+        assert!(shuffled.len() > 10);
+        let last = shuffled.len() - 1;
+        shuffled.swap(0, last);
+        assert!(Session::verify(Mode::Sprint, 42, &shuffled, 2000).is_none(), "ticks must not go backwards");
+        assert!(Session::verify(Mode::Sprint, 42, &s.log, 10).is_none(), "inputs after the end");
     }
     #[test]
     fn exercise_pieces_start_where_the_player_can_see_them() {

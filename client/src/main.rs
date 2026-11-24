@@ -1,6 +1,8 @@
 //! Block Stack 웹 클라이언트 (Leptos CSR → WASM).
 
+mod api;
 mod app;
+mod fullreplay;
 mod atmosphere;
 mod coop;
 mod practice;

@@ -12,6 +12,8 @@ pub mod game;
 pub mod piece;
 #[cfg(feature = "serde")]
 pub mod protocol;
+#[cfg(feature = "serde")]
+pub mod replay;
 pub mod rng;
 
 pub use game::*;

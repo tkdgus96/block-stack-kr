@@ -8,6 +8,7 @@ use bs_engine::bot;
 use bs_engine::game::{pack_cells, Game, Input, TICKS_PER_SECOND, VISIBLE_CELLS};
 use bs_engine::protocol::{encode, TargetMode, CombatEvent, CombatStatus, BattleStat, ChatLine, ClientMsg, RoomConfig, MemberState, MatchSummary, RoundPlayer, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg, MAX_CHAT_LEN};
 use bs_engine::rng::Rng;
+use bs_engine::replay::{MatchReplay, ReplayAction, ReplayEvent, ReplayPlayer};
 use std::collections::{HashMap, VecDeque};
 use axum::body::Bytes;
 use std::sync::{Arc, Mutex};
@@ -47,7 +48,12 @@ pub enum RoomCmd {
     Join { name: String, tx: Outbox, reply: oneshot::Sender<Result<u8, String>> },
     Msg { id: u8, msg: ClientMsg },
     Leave { id: u8 },
+    /// 빠른 대전 방으로 만든다. `humans` 명이 들어오면 바로 시작한다.
+    QuickPreset { vs_bot: bool, humans: u8 },
 }
+
+/// 빠른 대전 방에 아무도 들어오지 않으면 이 시간 뒤에 닫는다.
+const QUICK_JOIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct BotBrain {
     plan: VecDeque<Input>,
@@ -114,6 +120,10 @@ pub struct Room {
     departed: Vec<RoundPlayer>,
     profiles: HashMap<u8, String>,
     coop: bs_engine::protocol::CoopState,
+    /// 진행 중인 경기의 전체 리플레이 기록
+    replay: Option<MatchReplay>,
+    /// 빠른 대전: 시작에 필요한 사람 수와, 그때까지 기다릴 기한
+    quick: Option<(u8, tokio::time::Instant)>,
 }
 
 pub fn spawn_room(code: String, registry: Registry) -> mpsc::Sender<RoomCmd> {
@@ -134,7 +144,7 @@ pub fn spawn_room(code: String, registry: Registry) -> mpsc::Sender<RoomCmd> {
         finished: 0,
         last_scores: Vec::new(),
         chat: VecDeque::new(),
-        config: RoomConfig::default(), match_id: seed, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(),
+        config: RoomConfig::default(), match_id: seed, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None,
     };
     tokio::spawn(room.run(rx));
     tx
@@ -146,7 +156,13 @@ impl Room {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
         loop {
             let ticking = self.phase != Phase::Lobby;
+            let quick_deadline = self.quick.map(|(_, d)| d);
             tokio::select! {
+                _ = tokio::time::sleep_until(quick_deadline.unwrap_or_else(tokio::time::Instant::now)), if quick_deadline.is_some() => {
+                    // 매칭된 사람이 오지 않았다. 이미 들어온 사람은 일반 비공개 방으로 계속 쓴다.
+                    self.quick = None;
+                    if !self.players.iter().any(|p| p.tx.is_some()) { break; }
+                }
                 cmd = rx.recv() => {
                     let Some(cmd) = cmd else { break };
                     let was_lobby = self.phase == Phase::Lobby;
@@ -155,7 +171,7 @@ impl Room {
                         interval.reset();
                     }
                     self.publish_summary();
-                    if !self.players.iter().any(|p| p.tx.is_some()) {
+                    if !self.players.iter().any(|p| p.tx.is_some()) && self.quick.is_none() {
                         break;
                     }
                 }
@@ -293,6 +309,14 @@ impl Room {
                         self.send(id, &ServerMsg::Chat(self.chat.iter().cloned().collect()));
                     }
                     self.log(format!("{name} 님이 입장했습니다"));
+                    if let Some((humans, _)) = self.quick {
+                        let joined = self.players.iter().filter(|p| p.bot.is_none()).count() as u8;
+                        if joined >= humans && self.phase == Phase::Lobby {
+                            self.quick = None;
+                            self.log("빠른 대전을 시작합니다".into());
+                            self.start();
+                        }
+                    }
                     if self.phase != Phase::Lobby {
                         self.send(id, &ServerMsg::Log("게임 진행 중입니다. 다음 판부터 참가합니다".into()));
                         self.send(id, &ServerMsg::Scores(self.last_scores.clone()));
@@ -300,6 +324,12 @@ impl Room {
                 }
             }
             RoomCmd::Leave { id } => self.remove_player(id),
+            RoomCmd::QuickPreset { vs_bot, humans } => {
+                self.config = RoomConfig { public: false, max_players: 2, teams: false, ..RoomConfig::default() };
+                self.coop.enabled = false;
+                if vs_bot { let _ = self.add_player("빠른대전 봇".into(), None, true); }
+                self.quick = Some((humans, tokio::time::Instant::now() + QUICK_JOIN_TIMEOUT));
+            }
             RoomCmd::Msg { id, msg } => self.on_msg(id, msg),
         }
     }
@@ -307,6 +337,11 @@ impl Room {
     fn remove_player(&mut self, id: u8) {
         let Some(idx) = self.players.iter().position(|p| p.id == id) else { return };
         let p = self.players.remove(idx);
+        if p.in_game && self.phase != Phase::Lobby {
+            // 다음 tick 부터 진행하지 않는다.
+            let tick = self.elapsed_ticks + 1;
+            if let Some(r) = &mut self.replay { r.events.push(ReplayEvent { tick, player: id, action: ReplayAction::Leave }); }
+        }
         if p.in_game {
             let mut row = Self::round_player(&p);
             if row.place == 0 { row.place = (self.participants as u8).saturating_sub(self.finished); }
@@ -506,6 +541,20 @@ impl Room {
         }
     }
 
+    /// 레이팅 대상: 개인전 1:1, 두 사람 모두 서로 다른 프로필. (a, b, a 기준 점수)
+    fn rated_pair(summary: &MatchSummary, profiles: &HashMap<u8, String>, coop: bool) -> Option<(String, String, f64)> {
+        if coop || summary.teams || summary.players.len() != 2 { return None; }
+        let (pa, pb) = (&summary.players[0], &summary.players[1]);
+        let (a, b) = (profiles.get(&pa.id)?, profiles.get(&pb.id)?);
+        if a == b { return None; }
+        let score = match (summary.winners.contains(&pa.id), summary.winners.contains(&pb.id)) {
+            (true, false) => 1.0,
+            (false, true) => 0.0,
+            _ => 0.5,
+        };
+        Some((a.clone(), b.clone(), score))
+    }
+
     fn round_player(p: &Player) -> RoundPlayer {
         let g = p.game.as_ref();
         RoundPlayer { id: p.id, name: p.name.clone(), team: p.team, place: p.place,
@@ -556,6 +605,13 @@ impl Room {
         self.coop.progress = 0; self.coop.won = None;
         self.broadcast(&ServerMsg::CoopState(self.coop.clone()));
         self.reset_ready();
+        self.replay = Some(MatchReplay {
+            id: format!("{:016x}", self.rng.next_u64()),
+            seed,
+            players: self.players.iter().map(|p| ReplayPlayer { id: p.id, name: p.name.clone(), team: p.team, bot: p.bot.is_some() }).collect(),
+            events: Vec::new(),
+            end_tick: 0,
+        });
         for p in &mut self.players {
             p.in_game = true;
             p.game = Some(Game::new(seed));
@@ -619,6 +675,7 @@ impl Room {
                 if brain.wait > 0 {
                     brain.wait -= 1;
                 } else if let Some(i) = brain.plan.pop_front() {
+                    if let Some(r) = &mut self.replay { r.events.push(ReplayEvent { tick: self.elapsed_ticks, player: p.id, action: ReplayAction::Input(i) }); }
                     let event = game.apply_input(i);
                     evs.push((event, game.stats.pieces));
                     brain.wait = match self.config.bot_level { 0 => 10, 2 => 2, _ => 5 };
@@ -629,6 +686,7 @@ impl Room {
             } else {
                 for _ in 0..MAX_INPUTS_PER_TICK {
                     let Some((seq, input)) = p.inputs.pop_front() else { break };
+                    if let Some(r) = &mut self.replay { r.events.push(ReplayEvent { tick: self.elapsed_ticks, player: p.id, action: ReplayAction::Input(input) }); }
                     let event = game.apply_input(input);
                     evs.push((event, game.stats.pieces));
                     p.ack = seq;
@@ -657,7 +715,10 @@ impl Room {
             self.coop.progress = self.coop.progress.saturating_add(locks.iter().map(|e| e.sent as u32).sum::<u32>());
             if self.elapsed_ticks % (10 * TICKS_PER_SECOND) == 0 {
                 let wave = (2 + self.elapsed_ticks / (30 * TICKS_PER_SECOND)).min(6) as u8;
-                for p in self.players.iter_mut().filter(|p| p.alive()) { p.game.as_mut().unwrap().receive_garbage(wave); }
+                for p in self.players.iter_mut().filter(|p| p.alive()) {
+                    p.game.as_mut().unwrap().receive_garbage(wave);
+                    if let Some(r) = &mut self.replay { r.events.push(ReplayEvent { tick: self.elapsed_ticks, player: p.id, action: ReplayAction::Garbage(wave) }); }
+                }
                 self.log(format!("공동 생존: 모든 생존자에게 방해줄 {wave}줄!"));
             }
             if !locks.is_empty() || self.elapsed_ticks % TICKS_PER_SECOND == 0 { self.broadcast(&ServerMsg::CoopState(self.coop.clone())); }
@@ -679,6 +740,7 @@ impl Room {
             if let Some(dst) = self.players.iter_mut().find(|q| q.id == target) {
                 dst.game.as_mut().unwrap().receive_garbage(lines);
                 dst.last_attacker = Some(from);
+                if let Some(r) = &mut self.replay { r.events.push(ReplayEvent { tick: self.elapsed_ticks, player: target, action: ReplayAction::Garbage(lines) }); }
             }
             if lines >= 4 {
                 self.log(format!("{} → {} 공격 {}줄", self.name_of(from), self.name_of(target), lines));
@@ -911,7 +973,19 @@ impl Room {
                 tokio::task::spawn_blocking(move || { if crate::profile::record_match(&token, &key, sent, won).is_err() { eprintln!("Profile result could not be persisted"); } });
             }
         }
+        if let Some((a, b, score)) = Self::rated_pair(&summary, &self.profiles, self.coop.enabled) {
+            let key = format!("{}:{}", self.code, self.match_id);
+            tokio::task::spawn_blocking(move || { if crate::profile::record_rating(&a, &b, score, &key).is_err() { eprintln!("Rating could not be persisted"); } });
+        }
         self.last_summary = Some(summary.clone());
+        if let Some(mut replay) = self.replay.take() {
+            replay.end_tick = self.elapsed_ticks;
+            let id = replay.id.clone();
+            if crate::replays::enabled() {
+                tokio::task::spawn_blocking(move || { if crate::replays::save(&replay).is_err() { eprintln!("Replay could not be persisted"); } });
+                self.broadcast(&ServerMsg::ReplayReady { id });
+            }
+        }
         let mut ranking: Vec<(u8, u8)> = rows.iter().map(|p| (p.place, p.id)).collect();
         ranking.sort();
         self.send_states();
@@ -942,7 +1016,7 @@ mod tests {
             code: "CLOCK".into(), registry: Default::default(), players: Vec::new(), host: None,
             phase: Phase::Lobby, countdown: 0, elapsed_ticks: 0, ticks: 0, next_id: 1,
             rng: Rng::new(1), participants: 0, finished: 0, last_scores: Vec::new(), chat: VecDeque::new(),
-            config: RoomConfig::default(), match_id: 1, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(),
+            config: RoomConfig::default(), match_id: 1, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None,
         };
         let receivers = (0..count).map(|i| {
             let (tx, rx) = mpsc::channel(4096);
@@ -950,6 +1024,86 @@ mod tests {
             rx
         }).collect();
         (room, receivers)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn full_replay_reproduces_every_board_including_garbage_and_leavers() {
+        let (mut room, _rx) = fixture(2);
+        room.config.max_players = 6;
+        room.config.bot_level = 2;
+        for _ in 0..3 { room.add_player("bot".into(), None, true).unwrap(); }
+        room.start();
+        room.phase = Phase::Playing;
+        let mut seq = 0;
+        for t in 0..60 * 40 {
+            // 사람 두 명은 정해진 입력을 보낸다. 2번은 중간에 나간다.
+            if t % 7 == 0 {
+                seq += 1;
+                let input = [Input::Left, Input::RotateCw, Input::HardDrop, Input::Right, Input::Rotate180, Input::Hold][seq as usize % 6];
+                room.on_msg(1, ClientMsg::Input { seq, input });
+                if room.players.iter().any(|p| p.id == 2) { room.on_msg(2, ClientMsg::Input { seq, input: Input::HardDrop }); }
+            }
+            if t == 600 { room.remove_player(2); }
+            if room.phase != Phase::Playing { break; }
+            room.simulate();
+        }
+        let mut replay = room.replay.clone().expect("recording");
+        replay.end_tick = room.elapsed_ticks;
+        assert!(replay.events.iter().any(|e| matches!(e.action, ReplayAction::Garbage(_))), "bots must have attacked");
+        assert!(replay.events.iter().any(|e| e.action == ReplayAction::Leave));
+        let mut player = bs_engine::replay::Player::new(&replay);
+        player.advance_to(&replay, replay.end_tick);
+        for p in room.players.iter().filter(|p| p.in_game) {
+            let server = p.game.as_ref().unwrap();
+            let replayed = player.game(p.id).unwrap();
+            assert_eq!(replayed.board, server.board, "player {} board", p.id);
+            assert_eq!(replayed.stats, server.stats, "player {} stats", p.id);
+            assert_eq!(replayed.dead, server.dead);
+        }
+        let bytes = encode(&replay);
+        assert!(bytes.len() < 64 * 1024, "replay size {}", bytes.len());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quick_room_starts_when_matched_players_arrive() {
+        let (mut room, _rx) = fixture(0);
+        room.handle(RoomCmd::QuickPreset { vs_bot: false, humans: 2 });
+        assert!(!room.config.public);
+        assert_eq!(room.config.max_players, 2);
+        let (tx, _a) = mpsc::channel(256);
+        let (reply, _) = oneshot::channel();
+        room.handle(RoomCmd::Join { name: "a".into(), tx, reply });
+        assert_eq!(room.phase, Phase::Lobby, "waits for the second player");
+        let (tx, _b) = mpsc::channel(256);
+        let (reply, _) = oneshot::channel();
+        room.handle(RoomCmd::Join { name: "b".into(), tx, reply });
+        assert_eq!(room.phase, Phase::Countdown);
+        assert!(room.quick.is_none());
+        let (mut bot_room, _rx) = fixture(0);
+        bot_room.handle(RoomCmd::QuickPreset { vs_bot: true, humans: 1 });
+        assert!(bot_room.players[0].bot.is_some());
+        let (tx, _c) = mpsc::channel(256);
+        let (reply, _) = oneshot::channel();
+        bot_room.handle(RoomCmd::Join { name: "c".into(), tx, reply });
+        assert_eq!(bot_room.phase, Phase::Countdown);
+    }
+
+    #[test]
+    fn rating_needs_two_distinct_profiles_in_a_one_on_one() {
+        let row = |id| RoundPlayer { id, ..Default::default() };
+        let summary = MatchSummary { players: vec![row(1), row(2)], winners: vec![2], ..Default::default() };
+        let (ta, tb) = ("a".repeat(64), "b".repeat(64));
+        let both: HashMap<u8, String> = [(1, ta.clone()), (2, tb.clone())].into();
+        assert_eq!(Room::rated_pair(&summary, &both, false), Some((ta.clone(), tb.clone(), 0.0)));
+        assert_eq!(Room::rated_pair(&summary, &both, true), None, "coop");
+        let same: HashMap<u8, String> = [(1, ta.clone()), (2, ta.clone())].into();
+        assert_eq!(Room::rated_pair(&summary, &same, false), None, "same person in two seats");
+        let one: HashMap<u8, String> = [(1, ta.clone())].into();
+        assert_eq!(Room::rated_pair(&summary, &one, false), None, "bot or anonymous opponent");
+        let three = MatchSummary { players: vec![row(1), row(2), row(3)], ..Default::default() };
+        assert_eq!(Room::rated_pair(&three, &both, false), None);
+        let draw = MatchSummary { winners: vec![1, 2], ..summary };
+        assert_eq!(Room::rated_pair(&draw, &both, false).unwrap().2, 0.5);
     }
 
     #[tokio::test(start_paused = true)]
