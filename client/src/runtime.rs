@@ -13,7 +13,7 @@ use crate::render::{Board, BoardSpec};
 use crate::settings::{RendererKind, Settings, Theme};
 use crate::sound::{self, Sfx};
 use bs_engine::bot;
-use bs_engine::game::{unpack_cells, Game, Input, PREVIEW, VISIBLE, VISIBLE_CELLS, WIDTH};
+use bs_engine::game::{unpack_cells, Game, Input, HEIGHT, PREVIEW, VISIBLE, VISIBLE_CELLS, WIDTH};
 use bs_engine::protocol::{decode, encode, CombatEvent, CombatStatus, BattleStat, MatchSummary, MemberState, RoomConfig, ChatLine, ClientMsg, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg};
 use bs_engine::Kind;
 use leptos::prelude::*;
@@ -279,6 +279,8 @@ fn with_cb(f: impl FnOnce(&Callbacks)) {
     });
 }
 
+/// ARR 0 이나 내리기 반복 0 으로 키를 누르고 있을 때, 새 블록이 나왔는지 확인하는 간격(ms)
+const INSTANT_REPEAT_MS: i32 = 16;
 const HELD_INPUTS: [Input; 3] = [Input::Left, Input::Right, Input::SoftDrop];
 
 fn held_index(i: Input) -> Option<usize> {
@@ -330,7 +332,7 @@ pub fn init(ui: Ui) {
     let mk_das = |i: usize| Closure::<dyn FnMut()>::new(move || with(|c| c.on_das(i)).unwrap_or(()));
     let mk_rep = |i: usize| {
         Closure::<dyn FnMut()>::new(move || {
-            with(|c| c.local_input(HELD_INPUTS[i], now()));
+            with(|c| c.on_repeat(i));
         })
     };
     CB.with(|cb| {
@@ -907,7 +909,12 @@ impl Core {
 
     fn press_input(&mut self, input: Input, t0: f64) {
         if self.phase != Phase::Playing || self.predicted.as_ref().is_none_or(|g| g.dead) { return; }
-        self.local_input(input, t0);
+        if input == Input::SoftDrop && self.settings.sdr == 0 {
+            // 내리기 반복 0: 누르는 즉시 바닥까지 (고정은 하지 않는다)
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, t0);
+        }
         if let Some(h) = held_index(input) {
             // 반대 방향 이동 중이면 멈춤 (마지막 입력 우선)
             if h < 2 {
@@ -937,20 +944,49 @@ impl Core {
         let input = HELD_INPUTS[h];
         let rate = if h == 2 { self.settings.sdr } else { self.settings.arr };
         if rate == 0 {
-            // ARR 0: 벽까지 즉시 이동
-            for _ in 0..WIDTH {
-                self.local_input(input, now());
-            }
-            self.held[h] = None;
-            return;
+            // ARR 0: 벽(또는 바닥)까지 즉시 이동한다. 키를 누르고 있는 동안
+            // 다음 블록도 같은 방향 끝으로 보내야 하므로 반복 타이머를 계속 둔다.
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, now());
         }
-        self.local_input(input, now());
+        let interval = if rate == 0 { INSTANT_REPEAT_MS } else { rate.max(10) as i32 };
         with_cb(|cb| {
             let id = window()
-                .set_interval_with_callback_and_timeout_and_arguments_0(cb.rep[h].as_ref().unchecked_ref(), rate.max(10) as i32)
+                .set_interval_with_callback_and_timeout_and_arguments_0(cb.rep[h].as_ref().unchecked_ref(), interval)
                 .ok();
             self.held[h] = id;
         });
+    }
+
+    fn on_repeat(&mut self, h: usize) {
+        let input = HELD_INPUTS[h];
+        let rate = if h == 2 { self.settings.sdr } else { self.settings.arr };
+        if rate == 0 {
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, now());
+        }
+    }
+
+    /// 예측 상태에서 성공하는 입력인지 미리 확인한다. 실패할 입력은 서버로 보내지 않기 위해 쓴다.
+    fn input_would_apply(&self, input: Input) -> bool {
+        self.predicted.as_ref().is_some_and(|g| {
+            let mut probe = g.clone();
+            let before = probe.rev;
+            probe.apply_input(input);
+            probe.rev != before
+        })
+    }
+
+    /// 더 움직일 수 없을 때까지 같은 입력을 반복한다. 벽이나 바닥에 닿아 있으면 아무것도 보내지 않는다.
+    fn slide_to_end(&mut self, input: Input) {
+        for _ in 0..HEIGHT {
+            if self.phase != Phase::Playing || !self.input_would_apply(input) {
+                break;
+            }
+            self.local_input(input, now());
+        }
     }
 
     fn stop_held(&mut self, h: usize) {

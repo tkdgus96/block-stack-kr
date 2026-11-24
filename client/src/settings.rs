@@ -20,7 +20,7 @@ pub enum RendererKind {
     Canvas,
 }
 
-pub const ACTIONS: [(Input, &str); 7] = [
+pub const ACTIONS: [(Input, &str); 8] = [
     (Input::Left, "왼쪽 이동"),
     (Input::Right, "오른쪽 이동"),
     (Input::SoftDrop, "천천히 내리기"),
@@ -28,9 +28,10 @@ pub const ACTIONS: [(Input, &str); 7] = [
     (Input::RotateCw, "시계 방향 회전"),
     (Input::RotateCcw, "반시계 방향 회전"),
     (Input::Hold, "보관"),
+    (Input::Rotate180, "180도 회전"),
 ];
 
-pub const DEFAULT_KEYS: [&str; 7] = [
+pub const DEFAULT_KEYS: [&str; 8] = [
     "ArrowLeft",
     "ArrowRight",
     "ArrowDown",
@@ -38,6 +39,7 @@ pub const DEFAULT_KEYS: [&str; 7] = [
     "ArrowUp",
     "KeyZ",
     "KeyC",
+    "KeyA",
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,7 +57,7 @@ pub struct Settings {
     pub das: u16,
     pub arr: u16,
     pub sdr: u16,
-    pub keys: [String; 7],
+    pub keys: [String; 8],
     pub name: String,
     pub touch_size: u8,
     pub touch_opacity: u8,
@@ -92,6 +94,9 @@ impl Default for Settings {
     }
 }
 
+/// 경쟁용 프리셋의 DAS(ms). ARR 과 내리기 반복은 0(즉시)이다.
+pub const COMPETITIVE_DAS: u16 = 100;
+
 const STORAGE_KEY: &str = "blockstack.settings.v1";
 
 fn storage() -> Option<web_sys::Storage> {
@@ -108,6 +113,13 @@ impl Settings {
             .iter()
             .position(|k| k == code)
             .map(|i| ACTIONS[i].0)
+    }
+
+    /// 빠른 조작을 원하는 사용자를 위한 값. 키 배치와 화면 설정은 그대로 둔다.
+    pub fn apply_competitive_preset(&mut self) {
+        self.das = COMPETITIVE_DAS;
+        self.arr = 0;
+        self.sdr = 0;
     }
 
     /// 저사양 모드를 반영한 실제 값
@@ -169,7 +181,7 @@ impl Settings {
                 "touch_gestures" => s.touch_gestures = b,
                 _ => {
                     if let Some(i) = k.strip_prefix("key").and_then(|n| n.parse::<usize>().ok()) {
-                        if i < 7 && !v.is_empty() {
+                        if i < ACTIONS.len() && !v.is_empty() {
                             s.keys[i] = v.to_string();
                         }
                     }
@@ -252,6 +264,32 @@ mod tests {
             (100, 100, 0)
         );
         assert!(!s.touch_left_handed && !s.touch_vibration && !s.touch_gestures);
+    }
+
+    #[test]
+    fn rotate_180_key_has_default_and_round_trips() {
+        let s = Settings::default();
+        assert_eq!(s.action_for_code("KeyA"), Some(Input::Rotate180));
+        // 180도 회전이 생기기 전 저장된 설정에는 key7 이 없으므로 기본 키를 쓴다.
+        let old = Settings::from_storage("key6=KeyC");
+        assert_eq!(old.keys[7], "KeyA");
+        let mut s = Settings::default();
+        s.keys[7] = "KeyQ".into();
+        let loaded = Settings::from_storage(&s.to_storage());
+        assert_eq!(loaded.action_for_code("KeyQ"), Some(Input::Rotate180));
+        assert_eq!(Settings::from_storage("key8=KeyP").keys, Settings::default().keys, "unknown key slot is ignored");
+    }
+
+    #[test]
+    fn competitive_preset_only_changes_handling() {
+        let mut s = Settings::default();
+        s.name = "테스트".into();
+        s.keys[0] = "KeyJ".into();
+        let before = s.clone();
+        s.apply_competitive_preset();
+        assert_eq!((s.das, s.arr, s.sdr), (COMPETITIVE_DAS, 0, 0));
+        assert_eq!(Settings { das: before.das, arr: before.arr, sdr: before.sdr, ..s.clone() }, before);
+        assert_eq!(Settings::from_storage(&s.to_storage()), s);
     }
 
     #[test]

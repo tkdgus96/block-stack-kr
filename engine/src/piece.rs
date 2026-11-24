@@ -85,8 +85,14 @@ impl Kind {
 
 /// SRS transition-specific kick tests; coordinates use y-down. Index 4 is
 /// the fifth (last) kick and upgrades a qualifying T-spin Mini to Full.
+///
+/// 180도 회전은 SRS 에 정의가 없어 프로젝트 자체 규칙을 쓴다: 제자리, 한 칸 위,
+/// 오른쪽, 왼쪽 순서. 시도가 4개뿐이라 Mini 를 Full 로 올리는 다섯 번째 보정은 없다.
 pub fn kicks(kind: Kind, from: u8, to: u8) -> &'static [(i8, i8)] {
     if kind == Kind::O { return &[(0, 0)]; }
+    if (from + 2) & 3 == to & 3 {
+        return &[(0, 0), (0, -1), (1, 0), (-1, 0)];
+    }
     if kind == Kind::I {
         match (from & 3, to & 3) {
             (0, 1) | (3, 2) => &[(0,0),(-2,0),(1,0),(-2,1),(1,-2)],

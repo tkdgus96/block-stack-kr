@@ -45,6 +45,9 @@ pub enum Input {
     SoftDrop,
     HardDrop,
     Hold,
+    /// 반드시 맨 뒤에 둔다. postcard 는 enum 순서 번호로 직렬화하므로
+    /// 앞 값의 번호가 바뀌면 이전 클라이언트와 입력이 어긋난다.
+    Rotate180,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,8 +304,9 @@ impl Game {
                 }
                 ok
             }
-            Input::RotateCw | Input::RotateCcw => {
-                let ok = self.try_rotate(if input == Input::RotateCw { 1 } else { -1 });
+            Input::RotateCw | Input::RotateCcw | Input::Rotate180 => {
+                let dir = match input { Input::RotateCw => 1, Input::RotateCcw => -1, _ => 2 };
+                let ok = self.try_rotate(dir);
                 if ok {
                     self.on_moved();
                 }
@@ -676,6 +680,43 @@ mod tests {
         g.active = Some(Active { kind: Kind::O, rot: 0, x: 3, y: 5 });
         assert!(!g.try_rotate(1));
         assert_eq!(g.active.unwrap().rot, 0);
+    }
+
+    #[test]
+    fn rotate_180_matches_two_clockwise_turns_in_open_space() {
+        for kind in crate::piece::ALL_KINDS {
+            for from in 0..4 {
+                let mut a = Game::new(1);
+                a.active = Some(Active { kind, rot: from, x: 3, y: 8 });
+                let mut b = a.clone();
+                let ev = a.apply_input(Input::Rotate180);
+                assert!(!ev.locked);
+                b.try_rotate(1);
+                b.try_rotate(1);
+                let (mut ca, mut cb): (Vec<_>, Vec<_>) = (a.active.unwrap().cells().collect(), b.active.unwrap().cells().collect());
+                ca.sort();
+                cb.sort();
+                assert_eq!(ca, cb, "{kind:?} from {from}");
+                if kind != Kind::O {
+                    assert_eq!(a.combat.last_rotation, Some(RotationInfo { kick_index: 0 }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rotate_180_kicks_up_from_floor_and_resets_lock_delay() {
+        let mut g = Game::new(1);
+        // T 가 평평한 면을 아래로 하고 바닥에 붙어 있다. 180도 돌리면 뾰족한 칸이 바닥 밖으로 나가므로 한 칸 위로 보정한다.
+        g.active = Some(Active { kind: Kind::T, rot: 0, x: 3, y: (HEIGHT - 2) as i8 });
+        g.lock_counter = 10;
+        let rev = g.rev;
+        g.apply_input(Input::Rotate180);
+        let a = g.active.unwrap();
+        assert_eq!((a.rot, a.y), (2, (HEIGHT - 3) as i8));
+        assert_eq!(g.combat.last_rotation, Some(RotationInfo { kick_index: 1 }));
+        assert_eq!(g.lock_counter, 0, "successful 180 rotation on the ground resets lock delay");
+        assert_ne!(g.rev, rev);
     }
 
     #[test]

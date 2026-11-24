@@ -89,6 +89,7 @@ python3 tools/smoke_battle.py --url http://localhost:3000  # 모바일 터치·�
 python3 tools/smoke_evolution.py --url http://localhost:3000  # 결과·재대결·기록·방 설정·팀전
 python3 tools/smoke_touch_settings.py --url http://localhost:3000  # 터치 설정·저장·실제 조작
 python3 tools/smoke_combat.py --url http://localhost:3000  # 전투 패킷 UI fixture: 기술명·콤보·강조·모바일
+python3 tools/smoke_handling.py --url http://localhost:3000  # 180도 회전·즉시 내리기·ARR 0 유지·경쟁용 프리셋
 python tools/measure.py   # 실제 Edge/Chrome 으로 성능 측정 (서버 실행 필요, pip install playwright psutil)
 ```
 
@@ -132,7 +133,7 @@ docs/PERFORMANCE.md  측정 결과·방법·한계·수동 테스트 절차
 | 이동 | ← → (DAS 150ms, ARR 40ms) |
 | 천천히 내리기 | ↓ |
 | 바로 내리기 | Space |
-| 회전 | ↑ / X, 반대 회전 Z |
+| 회전 | ↑ / X, 반대 회전 Z, 180도 회전 A |
 | 보관 | C |
 
 작은 화면(900px 이하)이나 터치 기기에는 게임판 아래 **터치 조작 버튼**이 나타납니다. 이동·소프트드롭은 길게 누를 수 있고, 이동과 회전을 동시에 누를 수 있습니다. 보관, 양방향 회전, 하드드롭을 지원하며 대기/관전/탈락 중에는 비활성화됩니다.

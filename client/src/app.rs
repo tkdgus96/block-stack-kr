@@ -449,7 +449,14 @@ pub(crate) fn SettingsSheet(ui: Ui) -> impl IntoView {
                 </tr>
                 {num("DAS (ms)", |s| s.das, |s, v| s.das = v.min(500), "좌우 키를 누르고 있을 때 반복 시작까지")}
                 {num("ARR (ms)", |s| s.arr, |s, v| s.arr = v.min(200), "좌우 반복 간격 (0 = 벽까지 즉시)")}
-                {num("내리기 반복 (ms)", |s| s.sdr, |s, v| s.sdr = v.min(200), "천천히 내리기 반복 간격")}
+                {num("내리기 반복 (ms)", |s| s.sdr, |s, v| s.sdr = v.min(200), "천천히 내리기 반복 간격 (0 = 바닥까지 즉시, 고정은 하지 않음)")}
+                <tr>
+                    <th>"경쟁용 프리셋"</th>
+                    <td>
+                        <button class="link" on:click=move |_| set(&|x: &mut Settings| x.apply_competitive_preset())>"적용"</button>
+                    </td>
+                    <td class="muted">{format!("DAS {}ms, ARR 0, 내리기 반복 0 으로 바꿉니다. 키 배치는 그대로입니다.", crate::settings::COMPETITIVE_DAS)}</td>
+                </tr>
                 <tr>
                     <th>"이름"</th>
                     <td>
@@ -481,7 +488,7 @@ pub(crate) fn SettingsSheet(ui: Ui) -> impl IntoView {
                     })
                     .collect_view()}
             </table>
-            <p class="muted small">"X 키는 시계 방향 회전 보조키로도 동작합니다. 설정은 이 브라우저에만 저장됩니다."</p>
+            <p class="muted small">"X 키는 시계 방향 회전 보조키로도 동작합니다. 예전에 A 키를 다른 동작에 지정했다면 180도 회전 키를 따로 바꿔 주세요. 설정은 이 브라우저에만 저장됩니다."</p>
             <button on:click=move |_| set(&|x: &mut Settings| { let name = x.name.clone(); *x = Settings::default(); x.name = name; })>
                 "기본값으로 되돌리기"
             </button>
@@ -504,7 +511,7 @@ pub(crate) fn HelpSheet(ui: Ui) -> impl IntoView {
                 <tr><th>"공격량"</th><td>"일반 2/3/4줄 삭제는 공격 1/2/4줄. T스핀 싱글/더블/트리플은 2/4/6줄, 미니 싱글 기본 공격은 0줄입니다. 두 번째 연속 테트리스·T스핀 줄 삭제부터 B2B +1, 콤보 추가 공격과 퍼펙트 클리어 +4를 합산한 뒤 받을 공격부터 상쇄합니다."</td></tr>
                 <tr><th>"승리"</th><td>"블록이 맨 위를 넘으면 탈락합니다. 마지막까지 남은 사람이 승리합니다 (2~6명)."</td></tr>
                 <tr><th>"초대"</th><td>"상단의 '링크 복사'로 같은 방 주소를 공유하세요."</td></tr>
-                <tr><th>"기본 조작"</th><td>"← → 이동 · ↓ 천천히 · Space 바로 내리기 · ↑/X 회전 · Z 반대 회전 · C 보관"</td></tr>
+                <tr><th>"기본 조작"</th><td>"← → 이동 · ↓ 천천히 · Space 바로 내리기 · ↑/X 회전 · Z 반대 회전 · A 180도 회전 · C 보관"</td></tr>
             </table>
         </div>
     }

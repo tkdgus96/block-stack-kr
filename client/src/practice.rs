@@ -173,7 +173,7 @@ pub(crate) fn PracticeLab() -> impl IntoView {
         <section id="practice-lab" class="practice-lab feature-card" tabindex="0" node_ref=root aria-label="혼자 연습실"
             on:keydown=move |e:web_sys::KeyboardEvent| {
                 e.stop_propagation();
-                let action=match e.code().as_str(){"ArrowLeft"=>Some(Input::Left),"ArrowRight"=>Some(Input::Right),"ArrowDown"=>Some(Input::SoftDrop),"ArrowUp"|"KeyX"=>Some(Input::RotateCw),"KeyZ"=>Some(Input::RotateCcw),"Space"=>Some(Input::HardDrop),"KeyC"|"ShiftLeft"=>Some(Input::Hold),_=>None};
+                let action=match e.code().as_str(){"ArrowLeft"=>Some(Input::Left),"ArrowRight"=>Some(Input::Right),"ArrowDown"=>Some(Input::SoftDrop),"ArrowUp"|"KeyX"=>Some(Input::RotateCw),"KeyZ"=>Some(Input::RotateCcw),"KeyA"=>Some(Input::Rotate180),"Space"=>Some(Input::HardDrop),"KeyC"|"ShiftLeft"=>Some(Input::Hold),_=>None};
                 if let Some(action)=action {e.prevent_default();if !e.repeat() || matches!(action,Input::Left|Input::Right|Input::SoftDrop){input(action);}}
             }
             on:keyup=move |e:web_sys::KeyboardEvent| e.stop_propagation()
@@ -206,7 +206,7 @@ pub(crate) fn PracticeLab() -> impl IntoView {
                     <dt>"보관 / 다음 블록"</dt><dd>{move ||session.with(|s|format!("{} / {}",s.game.hold.map(|k|format!("{k:?}")).unwrap_or_else(||"—".into()),s.game.next.iter().take(5).map(|k|format!("{k:?}")).collect::<Vec<_>>().join(" ")))}</dd>
                     <dt>"개인 최고"</dt><dd>{move ||session.with(|s|best(s.mode).map(|v|if s.mode==Mode::Blitz{format!("{v}점")}else{time(v)}).unwrap_or_else(||"아직 없음".into()))}</dd></dl>
                     <button type="button" class="primary practice-start" on:click=move |_|restart()>{move ||if running.get(){"처음부터 다시"}else{"시작 / 다시 도전"}}</button>
-                    <p class="feature-note">"← → 이동 · ↓ 내리기 · ↑/X 오른쪽 회전 · Z 왼쪽 회전 · Space 고정 · C 보관"</p>
+                    <p class="feature-note">"← → 이동 · ↓ 내리기 · ↑/X 오른쪽 회전 · Z 왼쪽 회전 · A 180도 회전 · Space 고정 · C 보관"</p>
                     <p class="feature-note">"연습 과제는 자동 낙하 없이 천천히 조작할 수 있습니다. 최고 기록은 이 브라우저에 저장됩니다."</p>
                     <Show when=move ||!saved.get()><p role="status">"저장소를 사용할 수 없어 이번 기록은 저장되지 않았습니다."</p></Show>
                 </div>

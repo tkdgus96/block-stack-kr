@@ -321,4 +321,13 @@ mod tests {
         assert_eq!(decode::<ClientMsg>(&encode(&m)), Some(m));
     }
 
+    #[test]
+    fn input_discriminants_stay_stable_when_rotate_180_is_appended() {
+        let inputs = [Input::Left, Input::Right, Input::RotateCw, Input::RotateCcw, Input::SoftDrop, Input::HardDrop, Input::Hold, Input::Rotate180];
+        for (n, input) in inputs.into_iter().enumerate() {
+            let bytes = encode(&ClientMsg::Input { seq: 1, input });
+            assert_eq!(*bytes.last().unwrap(), n as u8, "{input:?}");
+            assert_eq!(decode::<ClientMsg>(&bytes), Some(ClientMsg::Input { seq: 1, input }));
+        }
+    }
 }
