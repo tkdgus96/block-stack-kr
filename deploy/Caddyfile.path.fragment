@@ -1,0 +1,9 @@
+# Place INSIDE the existing HTTPS site block, before its fallback proxy.
+# Keep the existing site's TLS/logging/fallback configuration.
+# Existing /ws remains the golf service; only /block-stack/* reaches the game.
+handle_path /block-stack/* {
+    reverse_proxy 127.0.0.1:3010
+}
+
+# Canonical trailing slash keeps relative room links and asset URLs consistent.
+redir /block-stack /block-stack/ 308

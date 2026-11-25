@@ -2,3 +2,10 @@
 /client/dist
 /tools/out
 __pycache__/
+.env
+.env.*
+!.env.example
+.DS_Store
+.wrangler/
+
+data/

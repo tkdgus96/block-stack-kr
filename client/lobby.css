@@ -1,0 +1,35 @@
+/* Shared room identity and readiness: labels remain explicit without color. */
+.lobby-identity { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; padding:10px; border:1px solid var(--accent,#167754); border-radius:8px; background:color-mix(in srgb,var(--accent,#167754) 7%,transparent); font-size:12px; }
+.lobby-identity strong { overflow-wrap:anywhere; }
+.lobby-self-label,.lobby-me { background:var(--accent,#167754); color:#071b14; border-radius:4px; padding:2px 5px; font-weight:800; }
+.lobby-player-id { font:700 11px ui-monospace,monospace; color:var(--muted,#667085); }
+.lobby-host { color:#b27809; font-weight:800; white-space:nowrap; }
+.theme-arcade .lobby-host,.theme-arcade .lobby-board-host { color:#f6cc6a; }
+.lobby-name-hint { font-size:10px; line-height:1.6; color:var(--muted,#667085); margin:7px 0 14px; }
+.lobby-roster-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:15px; }
+.lobby-roster-heading h3 { font-size:12px; margin:0; }
+.lobby-roster-heading > span { font-size:11px; color:var(--muted,#667085); }
+.ready-members .arc-roster-player { padding:9px 7px; border:1px solid transparent; border-radius:7px; flex-wrap:wrap; }
+.ready-members .arc-roster-player.is-me { border-color:var(--accent,#167754); background:color-mix(in srgb,var(--accent,#167754) 6%,transparent); }
+.ready-members .arc-avatar { width:34px; height:34px; font:800 11px ui-monospace,monospace; }
+.ready-members .arc-avatar[data-color="0"] { background:#d1dff4; color:#244c88; }
+.ready-members .arc-avatar[data-color="1"] { background:#c8ecdc; color:#155c45; }
+.ready-members .arc-avatar[data-color="2"] { background:#ead9fa; color:#623888; }
+.ready-members .arc-avatar[data-color="3"] { background:#ffe5bf; color:#794e11; }
+.ready-members .arc-avatar[data-color="4"] { background:#f9d6e0; color:#8d304f; }
+.ready-members .arc-avatar[data-color="5"] { background:#cdeaf0; color:#1c5c6a; }
+.lobby-role-tags { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:4px; }
+.ready-members .lobby-role-tags small { display:inline; font-size:10px; padding-top:0; }
+.ready-members .lobby-role-tags .lobby-me { color:#071b14; }
+.ready-members .lobby-role-tags .lobby-host { color:#b27809; }
+.theme-arcade .ready-members .lobby-role-tags .lobby-host { color:#f6cc6a; }
+.ready-members b.lobby-status { font-size:10px; padding:5px 6px; border:1px solid #8393a8; border-radius:5px; color:var(--muted,#526074); white-space:nowrap; }
+.ready-members b.lobby-status.ready { color:#146c43; background:#d8f4e4; border-color:#8ccbad; }
+.ready-members b.lobby-status.waiting { color:#795213; background:#fff0ce; border-color:#d9b265; }
+.theme-arcade .ready-members b.lobby-status.ready { color:#90f1bb; background:#17362e; border-color:#306c50; }
+.theme-arcade .ready-members b.lobby-status.waiting { color:#f2ce89; background:#352e21; border-color:#6c5936; }
+.lobby-start-note { line-height:1.7; }
+.arc-match-info > .lobby-identity { justify-content:flex-end; }
+@media (max-width:600px) { .arc-match-info > .lobby-identity { justify-content:flex-start; } }
+@media (prefers-contrast:more) { .ready-members .arc-roster-player { border-color:currentColor; } }
+.lobby-presence{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}.presence-player{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;border:1px solid #8395a744;border-radius:8px;font-size:12px;min-width:0}.presence-player strong{overflow-wrap:anywhere}.presence-player.mine{border-color:var(--accent,#20b78b)}.presence-state{font-size:11px;color:#a47e40}.presence-state.ready{color:#25b887}.theme-arcade .presence-state.ready{color:#66efbb}.theme-arcade .presence-state{color:#edc27e}@media(max-width:520px){.presence-player{width:100%;padding:7px 9px}.presence-state{margin-left:auto}}

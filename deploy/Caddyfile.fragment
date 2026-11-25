@@ -1,0 +1,19 @@
+# Add an import to the EXISTING /etc/caddy/Caddyfile after review:
+# import /etc/caddy/sites-enabled/block-stack.caddy
+# Replace games.example.com with the dedicated hostname. Do not add a second
+# global options block. Works with golfjoin's auto_https disable_redirects.
+https://games.example.com:443 {
+    tls {
+        protocols tls1.2 tls1.3
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    encode zstd gzip
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+    reverse_proxy 127.0.0.1:3010
+}

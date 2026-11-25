@@ -13,8 +13,8 @@ use crate::render::{Board, BoardSpec};
 use crate::settings::{RendererKind, Settings, Theme};
 use crate::sound::{self, Sfx};
 use bs_engine::bot;
-use bs_engine::game::{unpack_cells, Game, Input, PREVIEW, VISIBLE, VISIBLE_CELLS, WIDTH};
-use bs_engine::protocol::{decode, encode, ChatLine, ClientMsg, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg};
+use bs_engine::game::{unpack_cells, Game, Input, HEIGHT, PREVIEW, VISIBLE, VISIBLE_CELLS, WIDTH};
+use bs_engine::protocol::{decode, encode, TargetMode, CombatEvent, CombatStatus, BattleStat, MatchSummary, MemberState, RoomConfig, ChatLine, ClientMsg, Phase, PlayerInfo, PlayerStat, RoomSummary, ServerMsg};
 use bs_engine::Kind;
 use leptos::prelude::*;
 use std::cell::RefCell;
@@ -60,15 +60,36 @@ pub struct Ui {
     pub status: RwSignal<String>,
     pub countdown: RwSignal<u8>,
     pub ranking: RwSignal<Vec<u8>>,
+    pub match_info: RwSignal<(u16, u32, bool)>,
+    pub combat_feed: RwSignal<VecDeque<CombatEvent>>,
+    pub combat_states: RwSignal<Vec<CombatStatus>>,
+    pub battle_stats: RwSignal<Vec<BattleStat>>,
+    pub summary: RwSignal<Option<MatchSummary>>,
+    pub members: RwSignal<Vec<MemberState>>,
+    pub room_config: RwSignal<RoomConfig>,
+    pub records: RwSignal<crate::records::Records>,
+    pub recording_eligible: RwSignal<bool>,
+    pub battle_result: RwSignal<Option<(bool, Vec<u8>)>>,
     pub settings: RwSignal<Settings>,
     pub perf: RwSignal<PerfSummary>,
     pub rebinding: RwSignal<Option<usize>>,
     pub bench: RwSignal<bool>,
     /// 열린 방 목록 (방 목록 탭에서 요청할 때만 갱신)
     pub rooms: RwSignal<Vec<RoomSummary>>,
+    pub room_rules: RwSignal<Vec<(String, RoomConfig)>>,
     pub rooms_loaded: RwSignal<bool>,
     /// 같은 방 채팅 (최근 100줄)
     pub chat: RwSignal<VecDeque<ChatLine>>,
+    pub replay: RwSignal<Option<crate::replay::Replay>>,
+    pub coop: RwSignal<bs_engine::protocol::CoopState>,
+    pub coop_rooms: RwSignal<Vec<String>>,
+    /// 내가 받을 공격 중 도착 시각이 지나 다음 고정 때 올라올 줄 수
+    pub incoming_ready: RwSignal<u32>,
+    pub target_mode: RwSignal<TargetMode>,
+    /// 서버에 저장된 전체 리플레이 id (최근 경기 또는 공유 링크)
+    pub full_replay_id: RwSignal<Option<String>>,
+    /// 빠른 대전 대기 중
+    pub quick_waiting: RwSignal<bool>,
 }
 
 impl Ui {
@@ -85,18 +106,46 @@ impl Ui {
             status: RwSignal::new("대기".into()),
             countdown: RwSignal::new(0),
             ranking: RwSignal::new(Vec::new()),
+            match_info: RwSignal::new((0, 0, false)),
+            combat_feed: RwSignal::new(VecDeque::new()),
+            combat_states: RwSignal::new(Vec::new()),
+            battle_stats: RwSignal::new(Vec::new()),
+            summary: RwSignal::new(None),
+            members: RwSignal::new(Vec::new()),
+            room_config: RwSignal::new(RoomConfig::default()),
+            records: RwSignal::new(crate::records::Records::load()),
+            recording_eligible: RwSignal::new(false),
+            battle_result: RwSignal::new(None),
             settings: RwSignal::new(Settings::load()),
             perf: RwSignal::new(PerfSummary::default()),
             rebinding: RwSignal::new(None),
             bench: RwSignal::new(false),
             rooms: RwSignal::new(Vec::new()),
+            room_rules: RwSignal::new(Vec::new()),
             rooms_loaded: RwSignal::new(false),
             chat: RwSignal::new(VecDeque::new()),
+            replay: RwSignal::new(crate::replay::Replay::load()),
+            coop: RwSignal::new(Default::default()),
+            coop_rooms: RwSignal::new(Vec::new()),
+            incoming_ready: RwSignal::new(0),
+            target_mode: RwSignal::new(TargetMode::Random),
+            full_replay_id: RwSignal::new(crate::api::query("replay").filter(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))),
+            quick_waiting: RwSignal::new(false),
         }
     }
 }
 
 // ───────────────────────── 유틸 ─────────────────────────
+
+thread_local! {
+    /// 방에 들어갈 때 쓴 이름. 설정에 이름이 없으면 자동으로 만든 이름이다.
+    static DISPLAY_NAME: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// 다른 사람에게 보이는 내 이름 (순위표 등록에도 쓴다)
+pub fn display_name() -> String {
+    DISPLAY_NAME.with(|n| n.borrow().clone())
+}
 
 pub fn now() -> f64 {
     web_sys::window().and_then(|w| w.performance()).map(|p| p.now()).unwrap_or(0.0)
@@ -196,6 +245,10 @@ pub struct Core {
     closing: bool,
     me: u8,
     phase: Phase,
+    combat_v2: bool,
+    recorder: crate::replay::Recorder,
+    combat_seen: HashMap<u8, (u64, u32)>,
+    combat_floor: u64,
     server_game: Option<Game>,
     predicted: Option<Game>,
     pending: VecDeque<(u32, Input)>,
@@ -247,6 +300,8 @@ fn with_cb(f: impl FnOnce(&Callbacks)) {
     });
 }
 
+/// ARR 0 이나 내리기 반복 0 으로 키를 누르고 있을 때, 새 블록이 나왔는지 확인하는 간격(ms)
+const INSTANT_REPEAT_MS: i32 = 16;
 const HELD_INPUTS: [Input; 3] = [Input::Left, Input::Right, Input::SoftDrop];
 
 fn held_index(i: Input) -> Option<usize> {
@@ -267,6 +322,10 @@ pub fn init(ui: Ui) {
             closing: false,
             me: 0,
             phase: Phase::Lobby,
+            combat_v2: false,
+            recorder: Default::default(),
+            combat_seen: HashMap::new(),
+            combat_floor: 0,
             server_game: None,
             predicted: None,
             pending: VecDeque::new(),
@@ -294,7 +353,7 @@ pub fn init(ui: Ui) {
     let mk_das = |i: usize| Closure::<dyn FnMut()>::new(move || with(|c| c.on_das(i)).unwrap_or(()));
     let mk_rep = |i: usize| {
         Closure::<dyn FnMut()>::new(move || {
-            with(|c| c.local_input(HELD_INPUTS[i], now()));
+            with(|c| c.on_repeat(i));
         })
     };
     CB.with(|cb| {
@@ -389,6 +448,17 @@ fn install_listeners() {
     keyup.forget();
     blur.forget();
     vis.forget();
+    // Rebuild only on resize so Canvas and DOM use the same responsive cell size.
+    let resize = Closure::<dyn FnMut()>::new(move || {
+        with(|c| {
+            c.own = None;
+            c.previews.iter_mut().for_each(|p| *p = None);
+            c.own_dirty = true;
+            c.request(true);
+        });
+    });
+    let _ = w.add_event_listener_with_callback("resize", resize.as_ref().unchecked_ref());
+    resize.forget();
 }
 
 /// 자동 측정 스크립트용: window.__bsPerfDump() → JSON 문자열, window.__bsPerfReset()
@@ -428,6 +498,22 @@ fn expose_perf_api() {
 
 pub fn send(msg: ClientMsg) {
     with(|c| c.send(&msg));
+}
+
+pub fn in_match() -> bool {
+    with(|c| c.phase != Phase::Lobby).unwrap_or(false)
+}
+
+pub fn touch_press(input: Input) {
+    with(|c| c.press_input(input, now()));
+}
+
+pub fn touch_release(input: Input) {
+    with(|c| { if let Some(h) = held_index(input) { c.stop_held(h); } });
+}
+
+pub fn touch_cancel() {
+    with(|c| c.release_all());
 }
 
 pub fn apply_settings(s: Settings) {
@@ -496,8 +582,13 @@ impl Core {
         let loc = window().location();
         let proto = if loc.protocol().unwrap_or_default() == "https:" { "wss" } else { "ws" };
         let host = loc.host().unwrap_or_default();
-        let Ok(ws) = WebSocket::new(&format!("{proto}://{host}/ws")) else {
+        // Pages serves static files; production connects directly to the game server.
+        // Without a build-time override, local Trunk and single-server hosting keep /ws.
+        let same_origin = format!("{proto}://{host}/ws");
+        let endpoint = option_env!("BS_WS_URL").filter(|url| !url.is_empty()).unwrap_or(&same_origin);
+        let Ok(ws) = WebSocket::new(endpoint) else {
             self.ui.conn.set(Conn::Closed);
+            self.ui.status.set("서버 연결 주소를 확인해 주세요".into());
             return;
         };
         ws.set_binary_type(BinaryType::Arraybuffer);
@@ -513,6 +604,8 @@ impl Core {
                 if name.is_empty() {
                     name = format!("사용자{:02}", (js_sys::Math::random() * 100.0) as u32);
                 }
+                DISPLAY_NAME.with(|n| *n.borrow_mut() = name.clone());
+                c.send(&ClientMsg::Hello { protocol: bs_engine::protocol::PROTOCOL });
                 c.send(&ClientMsg::Join { room: c.want_room.clone(), name });
             });
         });
@@ -558,11 +651,56 @@ impl Core {
     fn on_server(&mut self, msg: ServerMsg) {
         match msg {
             ServerMsg::Welcome { you, room } => {
-                // 다른 방으로 옮기면 이전 방 채팅은 지운다 (새 방의 최근 기록이 곧 도착)
-                if self.ui.room.get_untracked() != room {
-                    self.ui.chat.set(VecDeque::new());
+                // 연결이 바뀌면 서버 대기열에서도 빠진다.
+                self.ui.quick_waiting.set(false);
+                // Every connection gets a new player session. Drop the old match
+                // before joining another room or returning as a spectator.
+                self.release_all();
+                self.combat_v2 = false;
+                self.combat_floor = 0;
+                self.ui.incoming_ready.set(0);
+                // 서버는 접속마다 새 플레이어를 만드므로 고른 공격 대상 방식을 다시 알린다.
+                let mode = self.ui.target_mode.get_untracked();
+                if mode != TargetMode::Random { self.send(&ClientMsg::SetTargetMode { mode }); }
+                self.combat_seen.clear();
+                self.ui.combat_feed.set(VecDeque::new());
+                self.ui.combat_states.set(Vec::new());
+                self.server_game = None;
+                self.predicted = None;
+                self.pending.clear();
+                self.seq = 0;
+                self.last_received = 0;
+                self.opps.clear();
+                self.own = None;
+                self.previews.iter_mut().for_each(|p| *p = None);
+                self.ui.summary.set(None);
+                self.ui.coop.set(Default::default());
+                self.recorder = Default::default();
+                self.ui.members.set(Vec::new());
+                self.ui.room_config.set(RoomConfig::default());
+                self.ui.recording_eligible.set(false);
+                self.ui.match_info.set((0, 0, false));
+                self.ui.battle_stats.set(Vec::new());
+                self.ui.battle_result.set(None);
+                self.ui.scores.set(Vec::new());
+                self.ui.ranking.set(Vec::new());
+                self.ui.countdown.set(0);
+                self.own_dirty = true;
+                self.opp_dirty = true;
+                self.request(true);
+                // The room replays recent history on every join, including reconnects.
+                self.ui.chat.set(VecDeque::new());
+                self.phase = Phase::Lobby;
+                self.ui.phase.set(Phase::Lobby);
+                for i in 0..=PREVIEW {
+                    let id = if i == 0 { "hold".to_string() } else { format!("next-{}", i - 1) };
+                    if let Some(el) = window().document().and_then(|d| d.get_element_by_id(&id)) {
+                        el.set_inner_html("");
+                    }
                 }
                 self.me = you;
+                self.send(&ClientMsg::EnableCombat);
+                if let Some(token) = crate::profile::token() { self.send(&ClientMsg::AttachProfile { token }); }
                 self.ui.me.set(you);
                 self.want_room = room.clone();
                 self.ui.room.set(room.clone());
@@ -579,7 +717,39 @@ impl Core {
                 self.opps.retain(|id, _| players.iter().any(|p| p.id == *id));
                 self.ui.players.set(players);
             }
+            ServerMsg::RoomState { config, members } => {
+                if self.ui.room_config.get_untracked() != config { self.ui.room_config.set(config); }
+                self.ui.members.set(members);
+            }
+            ServerMsg::MatchSummary(summary) => {
+                self.combat_floor = self.combat_floor.max(summary.match_id);
+                if self.ui.recording_eligible.get_untracked() && !self.ui.coop.get_untracked().enabled {
+                    let replay = self.recorder.finish();
+                    if !replay.frames.is_empty() { replay.save(); self.ui.replay.set(Some(replay)); }
+                    let room = self.ui.room.get_untracked();
+                    self.ui.records.update(|records| { if records.record(&room, self.me, &summary, js_sys::Date::now()) { records.save(); } });
+                    self.ui.recording_eligible.set(false);
+                }
+                let prefix = if summary.timed_out { "제한 시간 종료" } else { "경기 종료" };
+                let team_count: std::collections::HashSet<_> = summary.players.iter().filter(|p| summary.winners.contains(&p.id)).map(|p| p.team).collect();
+                let draw = if summary.teams { team_count.len() > 1 } else { summary.winners.len() > 1 };
+                self.ui.status.set(if self.ui.coop.get_untracked().enabled { if self.ui.coop.get_untracked().won == Some(true) { "협동 성공!".into() } else { "협동 도전 종료".into() } } else if draw { format!("{prefix} — 무승부") }
+                    else if summary.winners.contains(&self.me) { format!("{prefix} — {}승리!", if summary.teams { "우리 팀 " } else { "" }) }
+                    else if let Some(p) = summary.players.iter().find(|p| p.id == self.me) { format!("{prefix} — {}위",p.place) }
+                    else { format!("{prefix} — 관전 결과") });
+                if self.ui.coop.get_untracked().enabled { self.ui.recording_eligible.set(false); }
+                crate::profile::refresh();
+                self.ui.summary.set(Some(summary));
+            }
             ServerMsg::Started { seed } => {
+                self.recorder = Default::default();
+                self.combat_seen.clear();
+                self.ui.combat_feed.set(VecDeque::new());
+                self.ui.combat_states.set(Vec::new());
+                self.ui.recording_eligible.set(true);
+                self.ui.summary.set(None);
+                self.release_all();
+                self.ui.battle_result.set(None);
                 let g = Game::new(seed);
                 self.server_game = Some(g.clone());
                 self.predicted = Some(g);
@@ -591,6 +761,11 @@ impl Core {
                 self.request(true);
             }
             ServerMsg::Countdown { seconds } => {
+                // 지금 방에서 경기가 시작되면 빠른 대전 대기를 취소한다. 그대로 두면 상대를 찾았을 때 경기 중에 방을 옮긴다.
+                if self.ui.quick_waiting.get_untracked() {
+                    self.ui.quick_waiting.set(false);
+                    self.send(&ClientMsg::CancelQuickMatch);
+                }
                 self.ui.countdown.set(seconds);
                 if seconds > 0 {
                     self.ui.status.set(format!("시작까지 {seconds}초"));
@@ -600,30 +775,47 @@ impl Core {
                 }
             }
             ServerMsg::YourState { ack, game } => {
-                if game.stats.received > self.last_received && self.settings.sound {
-                    sound::play(Sfx::Garbage);
+                if !self.combat_v2 { self.authoritative_state(ack, game); }
+            }
+            ServerMsg::YourStateV2 { ack, mut game, combat } => {
+                self.combat_v2 = true;
+                game.combat = combat;
+                let ready: u32 = game.pending_schedule().iter().filter(|&&(_, at)| at <= game.elapsed).map(|&(n, _)| n as u32).sum();
+                if self.ui.incoming_ready.get_untracked() != ready { self.ui.incoming_ready.set(ready); }
+                self.ui.combat_states.update(|states| {
+                    let state = CombatStatus { id: self.me, combo: game.combo, b2b: game.combat.back_to_back };
+                    if let Some(old) = states.iter_mut().find(|s| s.id == self.me) { *old = state; } else { states.push(state); }
+                });
+                self.authoritative_state(ack, game);
+            }
+            ServerMsg::CombatStatus(states) => self.ui.combat_states.set(states),
+            ServerMsg::ReplayReady { id } => self.ui.full_replay_id.set(Some(id)),
+            ServerMsg::QuickMatchWaiting(waiting) => self.ui.quick_waiting.set(waiting),
+            ServerMsg::MatchFound { room, vs_bot } => {
+                self.ui.quick_waiting.set(false);
+                if self.phase != Phase::Lobby {
+                    self.log("경기 중이라 빠른 대전 상대에게 가지 않았습니다");
+                    return;
                 }
-                self.last_received = game.stats.received;
-                let was_alive = self.server_game.as_ref().is_some_and(|g| !g.dead);
-                if was_alive && game.dead {
-                    self.ui.status.set("탈락 — 다른 플레이어의 게임판을 관전 중".into());
-                    if self.settings.sound {
-                        sound::play(Sfx::GameOver);
-                    }
-                }
-                while self.pending.front().is_some_and(|p| p.0 <= ack) {
-                    self.pending.pop_front();
-                }
-                let mut p = game.clone();
-                for (_, i) in &self.pending {
-                    p.apply_input(*i);
-                }
-                self.server_game = Some(game);
-                if self.predicted.as_ref() != Some(&p) {
-                    self.predicted = Some(p);
-                    self.own_dirty = true;
-                    self.request(false);
-                }
+                self.ui.status.set(if vs_bot { "상대가 없어 봇과 대전합니다".into() } else { "상대를 찾았습니다".into() });
+                self.want_room = room;
+                self.reconnect_now();
+            }
+            ServerMsg::CombatEvent(event) => {
+                if event.match_id <= self.combat_floor { return; }
+                if self.combat_seen.get(&event.player).is_some_and(|&(id, piece)| event.match_id < id || (event.match_id == id && event.piece <= piece)) { return; }
+                self.combat_seen.insert(event.player, (event.match_id, event.piece));
+                if self.ui.combat_feed.with_untracked(|feed| feed.iter().any(|e| (e.match_id,e.player,e.piece) == (event.match_id,event.player,event.piece))) { return; }
+                if event.player == self.me { self.recorder.event(self.server_game.as_ref().map_or(0, |g| g.elapsed), event.clone()); }
+                self.ui.combat_states.update(|states| {
+                    let state = CombatStatus { id: event.player, combo: event.combo, b2b: event.b2b };
+                    if let Some(old) = states.iter_mut().find(|s| s.id == event.player) { *old = state; } else { states.push(state); }
+                });
+                self.ui.combat_feed.update(|feed| {
+                    if feed.iter().any(|e| (e.match_id,e.player,e.piece) == (event.match_id,event.player,event.piece)) { return; }
+                    if feed.len() >= 64 { feed.pop_front(); }
+                    feed.push_back(event);
+                });
             }
             ServerMsg::Boards(list) => {
                 for (id, packed) in list {
@@ -636,6 +828,20 @@ impl Core {
                 }
                 self.opp_dirty = true;
                 self.request(false);
+            }
+            ServerMsg::MatchInfo { remaining_secs, elapsed_ticks, timed } => {
+                self.ui.match_info.set((remaining_secs, elapsed_ticks, timed));
+            }
+            ServerMsg::BattleStats(stats) => self.ui.battle_stats.set(stats),
+            ServerMsg::BattleResult { timed_out, winners } => {
+                let prefix = if timed_out { "제한 시간 종료" } else { "게임 종료" };
+                let place = self.ui.scores.with_untracked(|s| s.iter().find(|s| s.id == self.me).map(|s| s.place));
+                self.ui.status.set(if winners.len() > 1 && winners.contains(&self.me) && !self.ui.room_config.get_untracked().teams {
+                    format!("{prefix} — 공동 1위 · 무승부")
+                } else if let Some(p) = place.filter(|p| *p > 0) {
+                    format!("{prefix} — {p}위")
+                } else { prefix.into() });
+                self.ui.battle_result.set(Some((timed_out, winners)));
             }
             ServerMsg::Scores(s) => self.ui.scores.set(s),
             ServerMsg::Log(t) => self.log(t),
@@ -666,6 +872,9 @@ impl Core {
                     }
                 });
             }
+            ServerMsg::CoopRooms(rooms) => self.ui.coop_rooms.set(rooms),
+            ServerMsg::CoopState(state) => { if self.ui.coop.get_untracked().enabled != state.enabled { self.ui.summary.set(None); } self.ui.coop.set(state); },
+            ServerMsg::RoomRules(rules) => self.ui.room_rules.set(rules),
             ServerMsg::Rooms(list) => {
                 self.ui.rooms.set(list);
                 self.ui.rooms_loaded.set(true);
@@ -679,7 +888,41 @@ impl Core {
 
     // ── 입력 ──
 
+    fn authoritative_state(&mut self, ack: u32, game: Game) {
+                // 아직 예전 버전인 서버는 게임판 크기가 다르다. 그대로 그리면 멈추므로 받지 않는다.
+                if game.board.len() != WIDTH * HEIGHT {
+                    self.ui.status.set("서버가 아직 예전 버전입니다. 잠시 뒤 새로고침해 주세요.".into());
+                    return;
+                }
+                if self.ui.recording_eligible.get_untracked() { self.recorder.frame(&game); }
+                if game.stats.received > self.last_received && self.settings.sound {
+                    sound::play(Sfx::Garbage);
+                }
+                self.last_received = game.stats.received;
+                let was_alive = self.server_game.as_ref().is_some_and(|g| !g.dead);
+                if was_alive && game.dead {
+                    self.ui.status.set("탈락 — 다른 플레이어의 게임판을 관전 중".into());
+                    if self.settings.sound {
+                        sound::play(Sfx::GameOver);
+                    }
+                }
+                while self.pending.front().is_some_and(|p| p.0 <= ack) {
+                    self.pending.pop_front();
+                }
+                let mut p = game.clone();
+                for (_, i) in &self.pending {
+                    p.apply_input(*i);
+                }
+                self.server_game = Some(game);
+                if self.predicted.as_ref() != Some(&p) {
+                    self.predicted = Some(p);
+                    self.own_dirty = true;
+                    self.request(false);
+                }
+    }
+
     fn on_keydown(&mut self, e: &KeyboardEvent) {
+        if window().document().and_then(|d| d.get_element_by_id("practice-lab")).is_some() { self.release_all(); return; }
         if let Some(t) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
             let tag = t.tag_name();
             if tag == "INPUT" || tag == "SELECT" || tag == "TEXTAREA" {
@@ -714,8 +957,17 @@ impl Core {
         if e.repeat() {
             return; // 브라우저 자동 반복 대신 자체 DAS/ARR 사용
         }
-        let t0 = e.time_stamp();
-        self.local_input(input, t0);
+        self.press_input(input, e.time_stamp());
+    }
+
+    fn press_input(&mut self, input: Input, t0: f64) {
+        if self.phase != Phase::Playing || self.predicted.as_ref().is_none_or(|g| g.dead) { return; }
+        if input == Input::SoftDrop && self.settings.sdr == 0 {
+            // 내리기 반복 0: 누르는 즉시 바닥까지 (고정은 하지 않는다)
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, t0);
+        }
         if let Some(h) = held_index(input) {
             // 반대 방향 이동 중이면 멈춤 (마지막 입력 우선)
             if h < 2 {
@@ -741,23 +993,53 @@ impl Core {
     }
 
     fn on_das(&mut self, h: usize) {
+        if window().document().and_then(|d| d.get_element_by_id("practice-lab")).is_some() { self.release_all(); return; }
         let input = HELD_INPUTS[h];
         let rate = if h == 2 { self.settings.sdr } else { self.settings.arr };
         if rate == 0 {
-            // ARR 0: 벽까지 즉시 이동
-            for _ in 0..WIDTH {
-                self.local_input(input, now());
-            }
-            self.held[h] = None;
-            return;
+            // ARR 0: 벽(또는 바닥)까지 즉시 이동한다. 키를 누르고 있는 동안
+            // 다음 블록도 같은 방향 끝으로 보내야 하므로 반복 타이머를 계속 둔다.
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, now());
         }
-        self.local_input(input, now());
+        let interval = if rate == 0 { INSTANT_REPEAT_MS } else { rate.max(10) as i32 };
         with_cb(|cb| {
             let id = window()
-                .set_interval_with_callback_and_timeout_and_arguments_0(cb.rep[h].as_ref().unchecked_ref(), rate.max(10) as i32)
+                .set_interval_with_callback_and_timeout_and_arguments_0(cb.rep[h].as_ref().unchecked_ref(), interval)
                 .ok();
             self.held[h] = id;
         });
+    }
+
+    fn on_repeat(&mut self, h: usize) {
+        let input = HELD_INPUTS[h];
+        let rate = if h == 2 { self.settings.sdr } else { self.settings.arr };
+        if rate == 0 {
+            self.slide_to_end(input);
+        } else {
+            self.local_input(input, now());
+        }
+    }
+
+    /// 예측 상태에서 성공하는 입력인지 미리 확인한다. 실패할 입력은 서버로 보내지 않기 위해 쓴다.
+    fn input_would_apply(&self, input: Input) -> bool {
+        self.predicted.as_ref().is_some_and(|g| {
+            let mut probe = g.clone();
+            let before = probe.rev;
+            probe.apply_input(input);
+            probe.rev != before
+        })
+    }
+
+    /// 더 움직일 수 없을 때까지 같은 입력을 반복한다. 벽이나 바닥에 닿아 있으면 아무것도 보내지 않는다.
+    fn slide_to_end(&mut self, input: Input) {
+        for _ in 0..HEIGHT {
+            if self.phase != Phase::Playing || !self.input_would_apply(input) {
+                break;
+            }
+            self.local_input(input, now());
+        }
     }
 
     fn stop_held(&mut self, h: usize) {
@@ -775,6 +1057,7 @@ impl Core {
 
     /// 로컬 입력: 즉시 예측 상태에 반영하고 서버로 비동기 전송 (응답을 기다리지 않음)
     fn local_input(&mut self, input: Input, t0: f64) {
+        if window().document().and_then(|d| d.get_element_by_id("practice-lab")).is_some() { self.release_all(); return; }
         if self.phase != Phase::Playing {
             return;
         }
@@ -900,9 +1183,14 @@ impl Core {
     fn render_own(&mut self) {
         let s = &self.settings;
         if self.own_dirty {
+            let cell = board_cell_px(s);
+            if let Some(body) = window().document().and_then(|d| d.body()) {
+                let _ = body.style().set_property("--cell", &format!("{cell}px"));
+                let _ = body.style().set_property("--pcell", &format!("{}px", (cell * 2 / 3).max(10)));
+            }
             self.own_dirty = false;
             let first = self.own.is_none();
-            let spec = BoardSpec { w: WIDTH, h: VISIBLE, headers: s.theme != Theme::Arcade, grid: true, cell_px: s.cell };
+            let spec = BoardSpec { w: WIDTH, h: VISIBLE, headers: s.theme != Theme::Arcade, grid: true, cell_px: cell };
             let ready = Self::ensure_board(&mut self.own, "my-board", s.renderer, s, spec);
             if ready && first && !self.board_marked {
                 self.board_marked = true;
@@ -923,7 +1211,7 @@ impl Core {
                     let kind = if i == 0 { g.hold } else { g.next.get(i - 1).copied() };
                     preview_cells(kind, if i == 0 { hold_code } else { None }, &mut small);
                     let id = if i == 0 { "hold".to_string() } else { format!("next-{}", i - 1) };
-                    let spec = BoardSpec { w: 4, h: 2, headers: false, grid: false, cell_px: (s.cell * 2 / 3).max(10) };
+                    let spec = BoardSpec { w: 4, h: 2, headers: false, grid: false, cell_px: (cell * 2 / 3).max(10) };
                     if Self::ensure_board(&mut self.previews[i], &id, s.renderer, s, spec) {
                         self.previews[i].as_mut().unwrap().update(&small);
                     }
@@ -1072,6 +1360,16 @@ impl Core {
             self.request(false);
         }
     }
+}
+
+/// Keep the arena board visible on compact laptops and narrow windows.
+fn board_cell_px(s: &Settings) -> u8 {
+    if s.theme != Theme::Arcade { return s.cell; }
+    let width = window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1280.0);
+    let height = window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(900.0);
+    let width_limit = ((width - 260.0) / WIDTH as f64).floor().clamp(12.0, 28.0) as u8;
+    let height_limit = ((height - 450.0) / VISIBLE as f64).floor().clamp(16.0, 28.0) as u8;
+    s.cell.min(width_limit).min(height_limit)
 }
 
 /// 상대 게임판 셀 크기. 아케이드 모드 1:1 대전은 상대 판을 크게 보여준다 (style.css 의 --mcell 과 동일 규칙)

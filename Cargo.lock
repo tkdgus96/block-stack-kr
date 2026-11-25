@@ -234,7 +234,10 @@ dependencies = [
  "bs-engine",
  "js-sys",
  "leptos",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -253,6 +256,9 @@ dependencies = [
  "axum",
  "bs-engine",
  "futures-util",
+ "serde",
+ "serde_json",
+ "sha2",
  "tokio",
  "tower-http",
 ]
