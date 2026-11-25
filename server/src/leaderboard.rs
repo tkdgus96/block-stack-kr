@@ -47,8 +47,9 @@ fn read(mode: RankedMode) -> Vec<Entry> {
     std::fs::read(file(mode)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
-/// 기록을 넣고 정렬한다. 순위가 바뀌었으면 true.
+/// 기록을 넣고 정렬한다. 새 기록이 목록에 남았으면 true. 자기 최고 기록보다 못하거나 순위 밖이면 false.
 fn insert(mode: RankedMode, entries: &mut Vec<Entry>, entry: Entry) -> bool {
+    let (owner, value) = (entry.owner.clone(), entry.value);
     if let Some(old) = entries.iter_mut().find(|e| e.owner == entry.owner) {
         if !better(mode, entry.value, old.value) {
             return false;
@@ -59,7 +60,7 @@ fn insert(mode: RankedMode, entries: &mut Vec<Entry>, entry: Entry) -> bool {
     }
     entries.sort_by(|a, b| if mode == RankedMode::Sprint { a.value.cmp(&b.value) } else { b.value.cmp(&a.value) });
     entries.truncate(KEEP);
-    true
+    entries.iter().any(|e| e.owner == owner && e.value == value)
 }
 
 /// 다시 실행해 확인한 기록. 끝까지 하지 않았거나 실패한 기록은 `None`.
@@ -73,7 +74,8 @@ fn clean_name(name: &str) -> String {
     if name.is_empty() { "플레이어".into() } else { name }
 }
 
-fn submit(token: &str, sub: LeaderboardSubmission) -> Result<u32, StatusCode> {
+/// 확인한 기록 값과, 그 기록이 순위표에 올라갔는지
+fn submit(token: &str, sub: LeaderboardSubmission) -> Result<(u32, bool), StatusCode> {
     if !crate::profile::exists(token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -81,7 +83,8 @@ fn submit(token: &str, sub: LeaderboardSubmission) -> Result<u32, StatusCode> {
     let owner = format!("{:x}", Sha256::digest(token.as_bytes()));
     let _guard = LOCK.lock().map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let mut entries = read(sub.mode);
-    if insert(sub.mode, &mut entries, Entry { name: clean_name(&sub.name), value, owner }) {
+    let stored = insert(sub.mode, &mut entries, Entry { name: clean_name(&sub.name), value, owner });
+    if stored {
         let path = file(sub.mode);
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let temp = path.with_extension("tmp");
@@ -89,7 +92,7 @@ fn submit(token: &str, sub: LeaderboardSubmission) -> Result<u32, StatusCode> {
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         std::fs::write(&temp, bytes).and_then(|_| std::fs::rename(&temp, &path)).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     }
-    Ok(value)
+    Ok((value, stored))
 }
 
 /// 파일에는 owner 까지 저장한다 (응답에는 넣지 않는다).
@@ -141,7 +144,7 @@ async fn create(headers: HeaderMap, body: Bytes) -> Response {
         (_, None) => StatusCode::BAD_REQUEST.into_response(),
         (Some(token), Some(sub)) => {
             match tokio::task::spawn_blocking(move || submit(&token, sub)).await {
-                Ok(Ok(value)) => Json(value).into_response(),
+                Ok(Ok((value, stored))) => Json(serde_json::json!({ "value": value, "stored": stored })).into_response(),
                 Ok(Err(code)) => code.into_response(),
                 Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             }
@@ -186,6 +189,10 @@ mod tests {
         insert(RankedMode::Blitz, &mut blitz, entry("a", 100));
         insert(RankedMode::Blitz, &mut blitz, entry("b", 900));
         assert_eq!(blitz[0].owner, "b");
+        // 목록이 가득 찼을 때 순위 밖으로 밀려나는 기록은 올라가지 않았다고 알린다.
+        let mut full: Vec<Entry> = (0..KEEP).map(|i| entry(&format!("p{i}"), 1000 + i as u32)).collect();
+        assert!(!insert(RankedMode::Sprint, &mut full, entry("late", 9000)));
+        assert!(insert(RankedMode::Sprint, &mut full, entry("fast", 10)));
         // 응답 JSON 에는 owner 가 없다.
         assert!(!serde_json::to_string(&blitz).unwrap().contains("owner"));
     }

@@ -38,12 +38,10 @@ pub fn enqueue(reg: &Registry, conn: u64, rating: f64, out: Outbox) {
     sweep(reg, Instant::now());
 }
 
-pub fn cancel(conn: u64) {
-    let mut q = QUEUE.lock().unwrap();
-    if let Some(i) = q.iter().position(|t| t.conn == conn) {
-        let t = q.remove(i);
-        notify(&t.out, &ServerMsg::QuickMatchWaiting(false));
-    }
+/// 대기열에 없어도 답한다. 재접속 뒤처럼 클라이언트만 기다리는 중이라고 알고 있는 경우가 있다.
+pub fn cancel(conn: u64, out: &Outbox) {
+    QUEUE.lock().unwrap().retain(|t| t.conn != conn);
+    notify(out, &ServerMsg::QuickMatchWaiting(false));
 }
 
 /// 연결이 끊긴 경우: 알릴 곳이 없으므로 조용히 뺀다.
@@ -88,6 +86,10 @@ pub fn sweep(reg: &Registry, now: Instant) {
         let code = crate::new_room_code(reg);
         let tx = crate::room_sender(reg, &code);
         if tx.try_send(RoomCmd::QuickPreset { vs_bot, humans: outs.len() as u8 }).is_err() {
+            // 방을 만들지 못했다. 대기열에서는 이미 뺐으므로 기다리지 않게 알린다.
+            for out in &outs {
+                notify(out, &ServerMsg::QuickMatchWaiting(false));
+            }
             continue;
         }
         for out in &outs {
@@ -131,10 +133,13 @@ mod tests {
         assert!(QUEUE.lock().unwrap().is_empty());
         // 취소하면 대기열에서 빠진다.
         let (td, mut rd) = mpsc::channel(16);
-        enqueue(&reg, 4, 1500.0, td);
-        cancel(4);
+        enqueue(&reg, 4, 1500.0, td.clone());
+        cancel(4, &td);
         assert_eq!(drain(&mut rd), vec![ServerMsg::QuickMatchWaiting(true), ServerMsg::QuickMatchWaiting(false)]);
         assert!(QUEUE.lock().unwrap().is_empty());
+        // 대기열에 없어도 기다리지 않는다고 답한다(재접속 뒤 버튼이 멈추지 않게).
+        cancel(4, &td);
+        assert_eq!(drain(&mut rd), vec![ServerMsg::QuickMatchWaiting(false)]);
         assert!(window(Duration::from_secs(20)) > 600.0);
     }
 }

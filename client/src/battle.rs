@@ -138,7 +138,7 @@ pub(crate) fn TargetModeSelect(ui: Ui) -> impl IntoView {
 pub(crate) fn QuickMatchButton(ui: Ui) -> impl IntoView {
     let lobby = move || ui.phase.get() == Phase::Lobby;
     view! {
-        <button class="arc-btn quick-match" class:waiting=move || ui.quick_waiting.get() disabled=move || !lobby()
+        <button class="arc-btn quick-match" class:waiting=move || ui.quick_waiting.get() disabled=move || !lobby() && !ui.quick_waiting.get()
             title="비슷한 실력의 상대와 1:1 대전을 바로 시작합니다. 15초 안에 상대가 없으면 봇과 대전합니다."
             on:click=move |_| {
                 if ui.quick_waiting.get_untracked() {

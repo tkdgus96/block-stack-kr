@@ -124,6 +124,8 @@ pub struct Room {
     replay: Option<MatchReplay>,
     /// 빠른 대전: 시작에 필요한 사람 수와, 그때까지 기다릴 기한
     quick: Option<(u8, tokio::time::Instant)>,
+    /// 빠른 대전으로 만든 방만 레이팅에 반영한다. 일반 방에서 자기 부계정을 이겨 올리는 것을 막는다.
+    rated: bool,
 }
 
 pub fn spawn_room(code: String, registry: Registry) -> mpsc::Sender<RoomCmd> {
@@ -144,7 +146,7 @@ pub fn spawn_room(code: String, registry: Registry) -> mpsc::Sender<RoomCmd> {
         finished: 0,
         last_scores: Vec::new(),
         chat: VecDeque::new(),
-        config: RoomConfig::default(), match_id: seed, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None,
+        config: RoomConfig::default(), match_id: seed, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None, rated: false,
     };
     tokio::spawn(room.run(rx));
     tx
@@ -161,6 +163,8 @@ impl Room {
                 _ = tokio::time::sleep_until(quick_deadline.unwrap_or_else(tokio::time::Instant::now)), if quick_deadline.is_some() => {
                     // 매칭된 사람이 오지 않았다. 이미 들어온 사람은 일반 비공개 방으로 계속 쓴다.
                     self.quick = None;
+                    self.rated = false;
+                    self.broadcast(&ServerMsg::Log("상대가 들어오지 않았습니다. 빠른 대전을 다시 눌러 주세요.".into()));
                     if !self.players.iter().any(|p| p.tx.is_some()) { break; }
                 }
                 cmd = rx.recv() => {
@@ -329,6 +333,7 @@ impl Room {
                 self.coop.enabled = false;
                 if vs_bot { let _ = self.add_player("빠른대전 봇".into(), None, true); }
                 self.quick = Some((humans, tokio::time::Instant::now() + QUICK_JOIN_TIMEOUT));
+                self.rated = !vs_bot;
             }
             RoomCmd::Msg { id, msg } => self.on_msg(id, msg),
         }
@@ -981,7 +986,7 @@ impl Room {
                 tokio::task::spawn_blocking(move || { if crate::profile::record_match(&token, &key, sent, won).is_err() { eprintln!("Profile result could not be persisted"); } });
             }
         }
-        if let Some((a, b, score)) = Self::rated_pair(&summary, &self.profiles, self.coop.enabled) {
+        if let Some((a, b, score)) = Self::rated_pair(&summary, &self.profiles, self.coop.enabled).filter(|_| self.rated) {
             let key = format!("{}:{}", self.code, self.match_id);
             tokio::task::spawn_blocking(move || { if crate::profile::record_rating(&a, &b, score, &key).is_err() { eprintln!("Rating could not be persisted"); } });
         }
@@ -1029,7 +1034,7 @@ mod tests {
             code: "CLOCK".into(), registry: Default::default(), players: Vec::new(), host: None,
             phase: Phase::Lobby, countdown: 0, elapsed_ticks: 0, ticks: 0, next_id: 1,
             rng: Rng::new(1), participants: 0, finished: 0, last_scores: Vec::new(), chat: VecDeque::new(),
-            config: RoomConfig::default(), match_id: 1, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None,
+            config: RoomConfig::default(), match_id: 1, last_summary: None, departed: Vec::new(), profiles: HashMap::new(), coop: Default::default(), replay: None, quick: None, rated: false,
         };
         let receivers = (0..count).map(|i| {
             let (tx, rx) = mpsc::channel(4096);

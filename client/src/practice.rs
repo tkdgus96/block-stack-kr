@@ -68,7 +68,8 @@ fn submit_rank(s: &Session, status: RwSignal<String>, ranks: RwSignal<Vec<Rank>>
         let result = crate::api::post_bytes("/api/leaderboard", &token, &body).await;
         if status.is_disposed() { return; }
         status.set(match result {
-            Ok(_) => "서버가 기록을 확인하고 순위표에 반영했습니다.".into(),
+            Ok(body) if body.contains("\"stored\":true") => "서버가 기록을 확인하고 순위표에 반영했습니다.".into(),
+            Ok(_) => "서버가 기록을 확인했습니다. 내 최고 기록보다 낮거나 순위 밖이라 순위표는 그대로입니다.".into(),
             Err(422) => "서버에서 다시 실행한 결과가 달라 등록하지 않았습니다.".into(),
             Err(401) => "서버 프로필을 찾을 수 없어 등록하지 않았습니다.".into(),
             Err(_) => "순위표 서버에 연결하지 못했습니다.".into(),

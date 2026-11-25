@@ -651,6 +651,8 @@ impl Core {
     fn on_server(&mut self, msg: ServerMsg) {
         match msg {
             ServerMsg::Welcome { you, room } => {
+                // 연결이 바뀌면 서버 대기열에서도 빠진다.
+                self.ui.quick_waiting.set(false);
                 // Every connection gets a new player session. Drop the old match
                 // before joining another room or returning as a spectator.
                 self.release_all();
@@ -759,6 +761,11 @@ impl Core {
                 self.request(true);
             }
             ServerMsg::Countdown { seconds } => {
+                // 지금 방에서 경기가 시작되면 빠른 대전 대기를 취소한다. 그대로 두면 상대를 찾았을 때 경기 중에 방을 옮긴다.
+                if self.ui.quick_waiting.get_untracked() {
+                    self.ui.quick_waiting.set(false);
+                    self.send(&ClientMsg::CancelQuickMatch);
+                }
                 self.ui.countdown.set(seconds);
                 if seconds > 0 {
                     self.ui.status.set(format!("시작까지 {seconds}초"));
@@ -786,6 +793,10 @@ impl Core {
             ServerMsg::QuickMatchWaiting(waiting) => self.ui.quick_waiting.set(waiting),
             ServerMsg::MatchFound { room, vs_bot } => {
                 self.ui.quick_waiting.set(false);
+                if self.phase != Phase::Lobby {
+                    self.log("경기 중이라 빠른 대전 상대에게 가지 않았습니다");
+                    return;
+                }
                 self.ui.status.set(if vs_bot { "상대가 없어 봇과 대전합니다".into() } else { "상대를 찾았습니다".into() });
                 self.want_room = room;
                 self.reconnect_now();

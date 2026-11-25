@@ -144,7 +144,7 @@ async fn handle_lobby_msg(reg: &Registry, conn: u64, out: &Outbox, msg: &ClientM
             let rating = tokio::task::spawn_blocking(move || profile::rating_of(&token)).await.unwrap_or(1500.0);
             matchmaking::enqueue(reg, conn, rating, out.clone());
         }
-        ClientMsg::CancelQuickMatch => matchmaking::cancel(conn),
+        ClientMsg::CancelQuickMatch => matchmaking::cancel(conn, out),
         // 입장 전에만 의미가 있다. 입장 뒤에 오면 버린다.
         ClientMsg::Hello { .. } => {}
         _ => return false,

@@ -188,6 +188,17 @@ impl Settings {
                 }
             }
         }
+        // 180도 회전 이전에 저장한 설정에는 key7 이 없다. 기본 키를 이미 다른 동작에 쓰고 있으면
+        // 같은 키에 두 동작이 겹쳐 180도 회전을 누를 수 없으므로 비어 있는 키를 대신 쓴다.
+        let rotate_180 = ACTIONS.len() - 1;
+        let saved_180 = raw.lines().any(|l| l.starts_with(&format!("key{rotate_180}=")));
+        if !saved_180 && s.keys[..rotate_180].contains(&s.keys[rotate_180]) {
+            s.keys[rotate_180] = ["KeyQ", "KeyE", "KeyW", "KeyD", "KeyS"]
+                .into_iter()
+                .find(|k| !s.keys[..rotate_180].iter().any(|used| used == k))
+                .unwrap_or_default()
+                .to_string();
+        }
         s
     }
 
@@ -273,6 +284,11 @@ mod tests {
         // 180도 회전이 생기기 전 저장된 설정에는 key7 이 없으므로 기본 키를 쓴다.
         let old = Settings::from_storage("key6=KeyC");
         assert_eq!(old.keys[7], "KeyA");
+        // 예전 설정에서 A를 이미 다른 동작에 썼다면 겹치지 않는 키를 쓴다.
+        let clash = Settings::from_storage("key0=KeyA");
+        assert_eq!(clash.action_for_code("KeyA"), Some(ACTIONS[0].0));
+        assert_eq!(clash.keys[7], "KeyQ");
+        assert_eq!(clash.action_for_code("KeyQ"), Some(Input::Rotate180));
         let mut s = Settings::default();
         s.keys[7] = "KeyQ".into();
         let loaded = Settings::from_storage(&s.to_storage());
