@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub const MAX_PLAYERS: usize = 6;
 pub const MAX_NAME_LEN: usize = 16;
 pub const MAX_CHAT_LEN: usize = 120;
+/// 게임판 크기처럼 예전 클라이언트가 해석하지 못하는 변경이 있을 때 올린다.
+/// 2: 숨김 영역을 10줄로 늘려 게임판이 300칸이 되었다.
+pub const PROTOCOL: u16 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ClientMsg {
@@ -35,6 +38,8 @@ pub enum ClientMsg {
     /// 빠른 대전 대기열에 들어간다. token 은 프로필 복구 코드(없으면 빈 문자열)로 레이팅을 찾는 데만 쓴다.
     QuickMatch { token: String },
     CancelQuickMatch,
+    /// 연결 직후 Join 보다 먼저 보낸다. 보내지 않은 예전 클라이언트는 입장을 거절하고 새로고침을 안내한다.
+    Hello { protocol: u16 },
 }
 
 /// 서버 순위표가 있는 연습 모드
@@ -377,6 +382,8 @@ mod tests {
         assert_eq!(encode(&rooms)[0],23); assert_eq!(decode::<ServerMsg>(&encode(&rooms)),Some(rooms));
         assert_eq!(encode(&ServerMsg::CombatStatus(vec![])),vec![21,0]);
         assert_eq!(encode(&ClientMsg::SetTargetMode { mode: TargetMode::Counter }),vec![14,2]);
+        assert_eq!(encode(&ClientMsg::CancelQuickMatch),vec![16]);
+        assert_eq!(encode(&ClientMsg::Hello { protocol: PROTOCOL }),vec![17,PROTOCOL as u8]);
     }
 
     #[test]

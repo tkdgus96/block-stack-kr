@@ -75,8 +75,10 @@ def main():
         lab.get_by_role('button', name='마라톤', exact=True).click()
         expect(lab.locator('.practice-ranks')).to_be_visible()
         lab.get_by_role('button', name='시작 / 다시 도전', exact=True).click()
+        # 서버는 초당 15개보다 빠르게 놓은 기록을 받지 않으므로 사람 속도로 누른다.
         for _ in range(40):
             a.keyboard.press('Space')
+            a.wait_for_timeout(120)
         expect(lab.locator('.practice-status')).to_contain_text('도전 종료')
         expect(lab.locator('.practice-ranks [role=status]')).to_have_text('서버가 기록을 확인하고 순위표에 반영했습니다.', timeout=10000)
         # 서버 데이터가 남아 있으면 다른 기록이 먼저 있을 수 있으므로 목록 안에 있는지만 본다.

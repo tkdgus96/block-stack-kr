@@ -145,6 +145,8 @@ async fn handle_lobby_msg(reg: &Registry, conn: u64, out: &Outbox, msg: &ClientM
             matchmaking::enqueue(reg, conn, rating, out.clone());
         }
         ClientMsg::CancelQuickMatch => matchmaking::cancel(conn),
+        // 입장 전에만 의미가 있다. 입장 뒤에 오면 버린다.
+        ClientMsg::Hello { .. } => {}
         _ => return false,
     }
     true
@@ -164,7 +166,8 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
         }
     });
 
-    // 첫 메시지는 Join 이어야 한다
+    // 첫 메시지는 Join 이어야 한다. 그 전에 Hello 로 프로토콜 버전을 받는다.
+    let mut protocol = 0u16;
     let (room_tx, id) = loop {
         let Some(Ok(msg)) = stream.next().await else {
             matchmaking::forget(conn);
@@ -173,6 +176,16 @@ async fn handle_socket(socket: WebSocket, reg: Registry) {
         };
         let Message::Binary(b) = msg else { continue };
         let (room, name) = match decode::<ClientMsg>(&b) {
+            Some(ClientMsg::Hello { protocol: p }) => {
+                protocol = p;
+                continue;
+            }
+            Some(ClientMsg::Join { .. }) if protocol < bs_engine::protocol::PROTOCOL => {
+                // 예전 클라이언트는 게임판 크기가 달라 상태를 받으면 멈춘다. 입장시키지 않는다.
+                let msg = ServerMsg::Error("새 버전이 나왔습니다. 페이지를 새로고침해 주세요.".into());
+                let _ = out_tx.send(axum::body::Bytes::from(encode(&msg))).await;
+                continue;
+            }
             Some(ClientMsg::Join { room, name }) => (room, name),
             Some(other) => {
                 handle_lobby_msg(&reg, conn, &out_tx, &other).await;

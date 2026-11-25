@@ -605,6 +605,7 @@ impl Core {
                     name = format!("사용자{:02}", (js_sys::Math::random() * 100.0) as u32);
                 }
                 DISPLAY_NAME.with(|n| *n.borrow_mut() = name.clone());
+                c.send(&ClientMsg::Hello { protocol: bs_engine::protocol::PROTOCOL });
                 c.send(&ClientMsg::Join { room: c.want_room.clone(), name });
             });
         });
@@ -877,6 +878,11 @@ impl Core {
     // ── 입력 ──
 
     fn authoritative_state(&mut self, ack: u32, game: Game) {
+                // 아직 예전 버전인 서버는 게임판 크기가 다르다. 그대로 그리면 멈추므로 받지 않는다.
+                if game.board.len() != WIDTH * HEIGHT {
+                    self.ui.status.set("서버가 아직 예전 버전입니다. 잠시 뒤 새로고침해 주세요.".into());
+                    return;
+                }
                 if self.ui.recording_eligible.get_untracked() { self.recorder.frame(&game); }
                 if game.stats.received > self.last_received && self.settings.sound {
                     sound::play(Sfx::Garbage);

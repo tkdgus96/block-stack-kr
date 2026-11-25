@@ -206,6 +206,10 @@ pub(crate) fn PracticeLab() -> impl IntoView {
             return;
         }
         update();
+        // update 에서 시간이 다 되어 끝났다면 이미 저장하고 제출했다.
+        if !running.get_untracked() {
+            return;
+        }
         session.update(|s| if pressed { s.press(key) } else { s.input(key) });
         let s = session.get_untracked();
         if s.outcome != Outcome::Playing {

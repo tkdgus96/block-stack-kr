@@ -377,8 +377,16 @@ impl Room {
                 self.send_states();
             }
             ClientMsg::AttachProfile { token } => {
-                if self.phase == Phase::Lobby && crate::profile::exists(&token) {
-                    if let Some(p) = self.players.iter_mut().find(|p| p.id == id) { p.profile = Some(token); }
+                // 빠른 대전은 입장하자마자 시작하므로 프로필이 카운트다운 중에 도착한다. 그때까지는 받는다.
+                let open = matches!(self.phase, Phase::Lobby | Phase::Countdown);
+                if open && crate::profile::exists(&token) {
+                    if let Some(p) = self.players.iter_mut().find(|p| p.id == id) {
+                        p.profile = Some(token.clone());
+                        // 같은 프로필이 두 자리에 있어도 rated_pair 와 merged_results 가 걸러 낸다.
+                        if self.phase == Phase::Countdown && p.in_game {
+                            self.profiles.insert(id, token);
+                        }
+                    }
                 }
             }
             ClientMsg::SetTargetMode { mode } => {
@@ -982,8 +990,13 @@ impl Room {
             replay.end_tick = self.elapsed_ticks;
             let id = replay.id.clone();
             if crate::replays::enabled() {
-                tokio::task::spawn_blocking(move || { if crate::replays::save(&replay).is_err() { eprintln!("Replay could not be persisted"); } });
-                self.broadcast(&ServerMsg::ReplayReady { id });
+                // 파일을 다 쓴 뒤에 알린다. 먼저 알리면 클라이언트가 아직 없는 파일을 요청한다.
+                let ready = Bytes::from(encode(&ServerMsg::ReplayReady { id }));
+                let outboxes: Vec<_> = self.players.iter().filter_map(|p| p.tx.clone()).collect();
+                tokio::task::spawn_blocking(move || match crate::replays::save(&replay) {
+                    Ok(()) => for tx in outboxes { let _ = tx.try_send(ready.clone()); },
+                    Err(_) => eprintln!("Replay could not be persisted"),
+                });
             }
         }
         let mut ranking: Vec<(u8, u8)> = rows.iter().map(|p| (p.place, p.id)).collect();

@@ -123,6 +123,10 @@ pub struct Session {
 pub const MAX_LOG: usize = 60_000;
 /// 다시 실행할 최대 tick (2시간)
 pub const MAX_VERIFY_TICKS: u32 = 2 * 60 * 60 * 60;
+/// 한 tick 에 들어올 수 있는 입력 수 상한. 대전 서버와 같은 값이다.
+pub const MAX_INPUTS_PER_TICK: usize = 16;
+/// 블록 하나에 드는 최소 tick (초당 15개). 사람이 이보다 빠르게 계속 놓을 수 없다.
+pub const MIN_TICKS_PER_PIECE: u32 = 4;
 impl Session {
     pub fn new(mode: Mode, seed: u64) -> Self {
         let mut game = Game::new(seed);
@@ -200,12 +204,19 @@ impl Session {
         if log.last().is_some_and(|l| l.0 > end_tick) {
             return None;
         }
+        if log.chunk_by(|a, b| a.0 == b.0).any(|same_tick| same_tick.len() > MAX_INPUTS_PER_TICK) {
+            return None;
+        }
         let mut s = Session::new(mode, seed);
         for &(tick, input, pressed) in log {
             s.advance_to(tick);
             if pressed { s.press(input) } else { s.input(input) }
         }
         s.advance_to(end_tick);
+        // 입력을 한꺼번에 몰아 넣어 시간을 줄인 기록을 막는다.
+        if s.game.stats.pieces.saturating_sub(1) * MIN_TICKS_PER_PIECE > s.ticks {
+            return None;
+        }
         Some(s)
     }
     /// 블록당 키 입력 수
@@ -488,6 +499,11 @@ mod tests {
         shuffled.swap(0, last);
         assert!(Session::verify(Mode::Sprint, 42, &shuffled, 2000).is_none(), "ticks must not go backwards");
         assert!(Session::verify(Mode::Sprint, 42, &s.log, 10).is_none(), "inputs after the end");
+        // 같은 입력을 모두 tick 0 에 몰아 넣으면 거절한다.
+        let squeezed: Vec<_> = s.log.iter().map(|&(_, i, p)| (0, i, p)).collect();
+        assert!(Session::verify(Mode::Sprint, 42, &squeezed, 2000).is_none(), "too many inputs in one tick");
+        let spread: Vec<_> = s.log.iter().enumerate().map(|(n, &(_, i, p))| ((n / MAX_INPUTS_PER_TICK) as u32, i, p)).collect();
+        assert!(Session::verify(Mode::Sprint, 42, &spread, 20).is_none(), "pieces placed faster than a person can");
     }
     #[test]
     fn exercise_pieces_start_where_the_player_can_see_them() {

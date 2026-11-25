@@ -82,6 +82,7 @@ pub fn load(id: &str) -> Option<MatchReplay> {
 
 async fn fetch(headers: HeaderMap, UrlPath(id): UrlPath<String>) -> Response {
     let found = tokio::task::spawn_blocking(move || load(&id).map(|r| encode(&r))).await.ok().flatten();
+    let saved = found.is_some();
     let mut response = match found {
         Some(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -90,8 +91,9 @@ async fn fetch(headers: HeaderMap, UrlPath(id): UrlPath<String>) -> Response {
         response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
     }
     response.headers_mut().insert(header::VARY, "Origin".parse().unwrap());
-    // 리플레이는 저장 뒤 바뀌지 않는다.
-    response.headers_mut().insert(header::CACHE_CONTROL, "public, max-age=86400".parse().unwrap());
+    // 리플레이는 저장 뒤 바뀌지 않는다. 찾지 못한 응답은 곧 저장될 수 있으므로 캐시하지 않는다.
+    let cache = if saved { "public, max-age=86400" } else { "no-store" };
+    response.headers_mut().insert(header::CACHE_CONTROL, cache.parse().unwrap());
     response
 }
 
